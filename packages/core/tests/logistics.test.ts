@@ -4,28 +4,13 @@ import { reduceCommand } from "../src/reducers";
 import { createInitialState } from "../src/state/initialState";
 import { runSimulationTick } from "../src/simulation/updateDay";
 
+function createLogisticsLabState() {
+  return reduceCommand(createInitialState(), { type: "InjectScenarioCommand", scenario: "logistics-lab" }).state;
+}
+
 describe("Oracle logistics", () => {
   it("queues and delivers precinct resources to needy buildings", () => {
-    let state = createInitialState();
-    const roadTiles = [
-      { x: 28, y: 50 },
-      { x: 29, y: 50 },
-      { x: 30, y: 50 },
-      { x: 31, y: 50 },
-      { x: 32, y: 50 },
-      { x: 33, y: 50 },
-      { x: 34, y: 50 },
-      { x: 35, y: 50 }
-    ];
-
-    for (const tile of roadTiles) {
-      state = reduceCommand(state, { type: "PlaceRoadCommand", tile }).state;
-    }
-
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 28, y: 48 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "inner_sanctum", tile: { x: 30, y: 48 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "castalian_spring", tile: { x: 32, y: 48 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "eternal_flame_brazier", tile: { x: 34, y: 48 } }).state;
+    let state = createLogisticsLabState();
 
     const brazier = state.buildings.find((building) => building.defId === "eternal_flame_brazier");
     const sanctum = state.buildings.find((building) => building.defId === "inner_sanctum");
@@ -66,7 +51,7 @@ describe("Oracle logistics", () => {
     expect(nextBrazier?.storedResources.olive_oil ?? 0).toBeGreaterThan(0);
     expect(nextSanctum?.storedResources.incense ?? 0).toBeGreaterThan(0);
     expect(nextSanctum?.storedResources.sacred_water ?? 0).toBeGreaterThan(0);
-    expect(nextState.walkers.find((walker) => walker.role === "carrier")?.assignedJobId).toBeUndefined();
+    expect(nextState.walkers.filter((walker) => walker.role === "carrier").every((walker) => !walker.assignedJobId)).toBe(true);
   });
 
   it("balances stock between storehouses before precinct shortages become critical", () => {
@@ -479,8 +464,8 @@ describe("Oracle logistics", () => {
       state = reduceCommand(state, { type: "PlaceRoadCommand", tile }).state;
     }
 
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 28, y: 49 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "eternal_flame_brazier", tile: { x: 34, y: 49 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 28, y: 48 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "eternal_flame_brazier", tile: { x: 34, y: 48 } }).state;
 
     const storehouse = state.buildings.find((building) => building.defId === "storehouse");
     const brazier = state.buildings.find((building) => building.defId === "eternal_flame_brazier");
