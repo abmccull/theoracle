@@ -12,17 +12,20 @@ describe("Oracle logistics", () => {
       { x: 29, y: 50 },
       { x: 30, y: 50 },
       { x: 31, y: 50 },
-      { x: 32, y: 50 }
+      { x: 32, y: 50 },
+      { x: 33, y: 50 },
+      { x: 34, y: 50 },
+      { x: 35, y: 50 }
     ];
 
     for (const tile of roadTiles) {
       state = reduceCommand(state, { type: "PlaceRoadCommand", tile }).state;
     }
 
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 28, y: 49 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "inner_sanctum", tile: { x: 29, y: 49 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "castalian_spring", tile: { x: 30, y: 49 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "eternal_flame_brazier", tile: { x: 31, y: 49 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 28, y: 48 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "inner_sanctum", tile: { x: 30, y: 48 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "castalian_spring", tile: { x: 32, y: 48 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "eternal_flame_brazier", tile: { x: 34, y: 48 } }).state;
 
     const brazier = state.buildings.find((building) => building.defId === "eternal_flame_brazier");
     const sanctum = state.buildings.find((building) => building.defId === "inner_sanctum");
@@ -74,15 +77,16 @@ describe("Oracle logistics", () => {
       { x: 29, y: 50 },
       { x: 30, y: 50 },
       { x: 31, y: 50 },
-      { x: 32, y: 50 }
+      { x: 32, y: 50 },
+      { x: 33, y: 50 }
     ];
 
     for (const tile of roadTiles) {
       state = reduceCommand(state, { type: "PlaceRoadCommand", tile }).state;
     }
 
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 27, y: 49 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 32, y: 49 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 27, y: 48 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 32, y: 48 } }).state;
 
     const [westStorehouse, eastStorehouse] = state.buildings.filter((building) => building.defId === "storehouse");
     state = {
@@ -139,10 +143,10 @@ describe("Oracle logistics", () => {
       state = reduceCommand(state, { type: "PlaceRoadCommand", tile }).state;
     }
 
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 26, y: 49 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 32, y: 49 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "inner_sanctum", tile: { x: 33, y: 49 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "eternal_flame_brazier", tile: { x: 34, y: 49 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 26, y: 48 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 30, y: 48 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "inner_sanctum", tile: { x: 32, y: 48 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "eternal_flame_brazier", tile: { x: 34, y: 48 } }).state;
 
     const [westStorehouse, eastStorehouse] = state.buildings.filter((building) => building.defId === "storehouse");
     const sanctum = state.buildings.find((building) => building.defId === "inner_sanctum");
@@ -201,19 +205,19 @@ describe("Oracle logistics", () => {
 
   it("queues supply jobs for the new grain, altar, and olive chains", () => {
     let state = createInitialState();
-    const roadTiles = Array.from({ length: 12 }, (_, index) => ({ x: 26 + index, y: 50 }));
+    const roadTiles = Array.from({ length: 14 }, (_, index) => ({ x: 26 + index, y: 50 }));
 
     for (const tile of roadTiles) {
       state = reduceCommand(state, { type: "PlaceRoadCommand", tile }).state;
     }
 
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 26, y: 49 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "granary", tile: { x: 27, y: 49 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "kitchen", tile: { x: 28, y: 49 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "animal_pen", tile: { x: 29, y: 49 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "sacrificial_altar", tile: { x: 30, y: 49 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "olive_press", tile: { x: 31, y: 49 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "incense_store", tile: { x: 32, y: 49 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 26, y: 48 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "granary", tile: { x: 28, y: 48 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "kitchen", tile: { x: 30, y: 48 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "animal_pen", tile: { x: 32, y: 48 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "sacrificial_altar", tile: { x: 34, y: 48 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "olive_press", tile: { x: 36, y: 48 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "incense_store", tile: { x: 38, y: 48 } }).state;
 
     const storehouse = state.buildings.find((building) => building.defId === "storehouse");
     const kitchen = state.buildings.find((building) => building.defId === "kitchen");
@@ -302,17 +306,20 @@ describe("Oracle logistics", () => {
       { x: 29, y: 50 },
       { x: 30, y: 50 },
       { x: 31, y: 50 },
-      { x: 32, y: 50 }
+      { x: 32, y: 50 },
+      { x: 33, y: 50 },
+      { x: 34, y: 50 },
+      { x: 35, y: 50 }
     ];
 
     for (const tile of roadTiles) {
       state = reduceCommand(state, { type: "PlaceRoadCommand", tile }).state;
     }
 
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "kitchen", tile: { x: 28, y: 49 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "animal_pen", tile: { x: 29, y: 49 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "olive_press", tile: { x: 30, y: 49 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "sacrificial_altar", tile: { x: 31, y: 49 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "kitchen", tile: { x: 28, y: 48 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "animal_pen", tile: { x: 30, y: 48 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "olive_press", tile: { x: 32, y: 48 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "sacrificial_altar", tile: { x: 34, y: 48 } }).state;
 
     const kitchen = state.buildings.find((building) => building.defId === "kitchen");
     const animalPen = state.buildings.find((building) => building.defId === "animal_pen");
@@ -394,10 +401,10 @@ describe("Oracle logistics", () => {
       state = reduceCommand(state, { type: "PlaceRoadCommand", tile }).state;
     }
 
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 26, y: 49 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 32, y: 49 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "inner_sanctum", tile: { x: 33, y: 49 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "eternal_flame_brazier", tile: { x: 34, y: 49 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 26, y: 48 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 30, y: 48 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "inner_sanctum", tile: { x: 32, y: 48 } }).state;
+    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "eternal_flame_brazier", tile: { x: 34, y: 48 } }).state;
 
     const [westStorehouse, eastStorehouse] = state.buildings.filter((building) => building.defId === "storehouse");
     const sanctum = state.buildings.find((building) => building.defId === "inner_sanctum");
