@@ -55,25 +55,10 @@ describe("Oracle logistics", () => {
   });
 
   it("balances stock between storehouses before precinct shortages become critical", () => {
-    let state = createInitialState();
-    const roadTiles = [
-      { x: 27, y: 50 },
-      { x: 28, y: 50 },
-      { x: 29, y: 50 },
-      { x: 30, y: 50 },
-      { x: 31, y: 50 },
-      { x: 32, y: 50 },
-      { x: 33, y: 50 }
-    ];
-
-    for (const tile of roadTiles) {
-      state = reduceCommand(state, { type: "PlaceRoadCommand", tile }).state;
-    }
-
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 27, y: 48 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 32, y: 48 } }).state;
-
-    const [westStorehouse, eastStorehouse] = state.buildings.filter((building) => building.defId === "storehouse");
+    let state = createLogisticsLabState();
+    const [westStorehouse, eastStorehouse] = state.buildings
+      .filter((building) => building.defId === "storehouse")
+      .sort((left, right) => left.position.x - right.position.x);
     state = {
       ...state,
       buildings: state.buildings.map((building) => {
@@ -189,22 +174,10 @@ describe("Oracle logistics", () => {
   });
 
   it("queues supply jobs for the new grain, altar, and olive chains", () => {
-    let state = createInitialState();
-    const roadTiles = Array.from({ length: 14 }, (_, index) => ({ x: 26 + index, y: 50 }));
-
-    for (const tile of roadTiles) {
-      state = reduceCommand(state, { type: "PlaceRoadCommand", tile }).state;
-    }
-
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 26, y: 48 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "granary", tile: { x: 28, y: 48 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "kitchen", tile: { x: 30, y: 48 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "animal_pen", tile: { x: 32, y: 48 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "sacrificial_altar", tile: { x: 34, y: 48 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "olive_press", tile: { x: 36, y: 48 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "incense_store", tile: { x: 38, y: 48 } }).state;
-
-    const storehouse = state.buildings.find((building) => building.defId === "storehouse");
+    let state = createLogisticsLabState();
+    const storehouse = state.buildings
+      .filter((building) => building.defId === "storehouse")
+      .sort((left, right) => left.position.x - right.position.x)[0];
     const kitchen = state.buildings.find((building) => building.defId === "kitchen");
     const animalPen = state.buildings.find((building) => building.defId === "animal_pen");
     const altar = state.buildings.find((building) => building.defId === "sacrificial_altar");
@@ -285,26 +258,7 @@ describe("Oracle logistics", () => {
   });
 
   it("processes kitchen, animal pen, olive press, and altar recipes once supplied", () => {
-    let state = createInitialState();
-    const roadTiles = [
-      { x: 28, y: 50 },
-      { x: 29, y: 50 },
-      { x: 30, y: 50 },
-      { x: 31, y: 50 },
-      { x: 32, y: 50 },
-      { x: 33, y: 50 },
-      { x: 34, y: 50 },
-      { x: 35, y: 50 }
-    ];
-
-    for (const tile of roadTiles) {
-      state = reduceCommand(state, { type: "PlaceRoadCommand", tile }).state;
-    }
-
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "kitchen", tile: { x: 28, y: 48 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "animal_pen", tile: { x: 30, y: 48 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "olive_press", tile: { x: 32, y: 48 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "sacrificial_altar", tile: { x: 34, y: 48 } }).state;
+    let state = createLogisticsLabState();
 
     const kitchen = state.buildings.find((building) => building.defId === "kitchen");
     const animalPen = state.buildings.find((building) => building.defId === "animal_pen");
@@ -369,29 +323,10 @@ describe("Oracle logistics", () => {
   });
 
   it("adds extra carriers and keeps critical sacred jobs ahead of routine rebalancing", () => {
-    let state = createInitialState();
-    const roadTiles = [
-      { x: 26, y: 50 },
-      { x: 27, y: 50 },
-      { x: 28, y: 50 },
-      { x: 29, y: 50 },
-      { x: 30, y: 50 },
-      { x: 31, y: 50 },
-      { x: 32, y: 50 },
-      { x: 33, y: 50 },
-      { x: 34, y: 50 }
-    ];
-
-    for (const tile of roadTiles) {
-      state = reduceCommand(state, { type: "PlaceRoadCommand", tile }).state;
-    }
-
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 26, y: 48 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 30, y: 48 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "inner_sanctum", tile: { x: 32, y: 48 } }).state;
-    state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "eternal_flame_brazier", tile: { x: 34, y: 48 } }).state;
-
-    const [westStorehouse, eastStorehouse] = state.buildings.filter((building) => building.defId === "storehouse");
+    let state = createLogisticsLabState();
+    const [westStorehouse, eastStorehouse] = state.buildings
+      .filter((building) => building.defId === "storehouse")
+      .sort((left, right) => left.position.x - right.position.x);
     const sanctum = state.buildings.find((building) => building.defId === "inner_sanctum");
     const brazier = state.buildings.find((building) => building.defId === "eternal_flame_brazier");
     state = {
