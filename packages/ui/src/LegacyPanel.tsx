@@ -56,7 +56,7 @@ function ArtifactView({ artifact }: { artifact: LegacyArtifact }) {
         </div>
       </div>
 
-      <div className="text-xs" style={{ color: "var(--text-dim)", marginBottom: 6 }}>
+      <div className="text-xs text-dim mb-2">
         {artifact.finalAge} -- {artifact.finalReputation}
       </div>
 
@@ -122,15 +122,15 @@ export function LegacyPanel({ state }: { state: GameState }) {
   if (status.phase === "terminal" && artifact) {
     return (
       <div className="legacy-panel legacy-ceremony">
-        <div className="sidebar-block ceremony-section" style={{ animationDelay: "0s" }}>
+        <div className="sidebar-block ceremony-section ceremony-delay-1">
           <div className="section-title">Legacy of Delphi</div>
         </div>
-        <div className="ceremony-section" style={{ animationDelay: "0.3s" }}>
+        <div className="ceremony-section ceremony-delay-2">
           <div className="legacy-epitaph-ceremony">
             <p>{artifact.epitaph}</p>
           </div>
         </div>
-        <div className="ceremony-section" style={{ animationDelay: "0.6s" }}>
+        <div className="ceremony-section ceremony-delay-3">
           <div className="legacy-stats">
             <div className="pop-stat">
               <span className="pop-stat-count">{artifact.totalYears}</span>
@@ -145,17 +145,16 @@ export function LegacyPanel({ state }: { state: GameState }) {
               <span className="pop-stat-label">Major Prophecies</span>
             </div>
           </div>
-          <div className="text-xs" style={{ color: "var(--text-dim)" }}>
+          <div className="text-xs text-dim">
             {artifact.finalAge} — {artifact.finalReputation}
           </div>
         </div>
-        <div className="ceremony-section" style={{ animationDelay: "0.9s" }}>
+        <div className="ceremony-section ceremony-delay-4">
           <ArtifactView artifact={artifact} />
         </div>
-        <div className="ceremony-section" style={{ animationDelay: "1.2s" }}>
+        <div className="ceremony-section ceremony-delay-5">
           <button
-            className="oracle-button gold"
-            style={{ width: "100%", marginTop: 8 }}
+            className="oracle-button gold w-full mt-2"
             onClick={() => dispatch.onOpenRunSetup()}
             type="button"
           >
@@ -172,23 +171,22 @@ export function LegacyPanel({ state }: { state: GameState }) {
       <div className="legacy-panel">
         <div className="sidebar-block">
           <div className="section-title">Oracle in Decline</div>
-          <div className="text-sm" style={{ color: "var(--text-dim)", marginBottom: 8 }}>
+          <div className="text-sm text-dim mb-2">
             The oracle's influence is fading. Resources contract each month, and pilgrims grow scarce.
             A major prophecy success can slow or reverse the decline.
           </div>
           <SeverityMeter severity={status.declineSeverity} />
           <ScoreBar score={status.scorePreview} />
           {status.comebackAttempts > 0 ? (
-            <div className="text-xs" style={{ color: "var(--text-dim)" }}>
+            <div className="text-xs text-dim">
               Comeback attempts: {status.comebackAttempts}
             </div>
           ) : null}
-          <div className="text-xs" style={{ color: "var(--text-dim)", marginTop: 6 }}>
+          <div className="text-xs text-dim mt-2">
             Suggestions: deliver high-value prophecies, resolve crises, secure trade routes.
           </div>
           <button
-            className="oracle-button"
-            style={{ marginTop: 8 }}
+            className="oracle-button mt-2"
             onClick={() => dispatch.onTriggerEndOfRun()}
             type="button"
           >
@@ -205,7 +203,7 @@ export function LegacyPanel({ state }: { state: GameState }) {
       <div className="sidebar-block">
         <div className="section-title">Legacy Preview</div>
         <ScoreBar score={status.scorePreview} />
-        <div className="text-xs" style={{ color: "var(--text-dim)", marginTop: 4 }}>
+        <div className="text-xs text-dim mt-1">
           Phase: {status.phase}
         </div>
       </div>

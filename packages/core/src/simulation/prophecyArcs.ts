@@ -1,4 +1,4 @@
-import type { DomainTag, FactionId, GameState, ProphecyRecord } from "../state/gameState";
+import type { DomainTag, EventFeedItem, FactionId, GameState, ProphecyRecord } from "../state/gameState";
 import type {
   ProphecyArc,
   ProphecyArcMilestone,
@@ -85,6 +85,13 @@ export function createProphecyArc(
   const primaryTarget = record.semantics[0]?.target ?? "oracle";
   const label = `${primaryTarget[0]!.toUpperCase()}${primaryTarget.slice(1)} ${record.semantics[0]?.action ?? "prophecy"} arc`;
 
+  // Count chain length: how many arcs this faction already has for the same domain
+  const existingArcs = (state.prophecyArcs?.arcs ?? []).filter(
+    (a) => a.factionId === record.factionId && a.domain === domain
+  );
+  const chainLength = existingArcs.length + 1;
+  const isGrandProphecy = chainLength >= 3;
+
   return {
     id: `arc-${record.id}`,
     rootProphecyId: record.id,
@@ -96,7 +103,10 @@ export function createProphecyArc(
     status: "active",
     milestones,
     interpretationBranches: [],
-    followUpObligations: followUps
+    followUpObligations: followUps,
+    chainLength,
+    isGrandProphecy,
+    grandProphecyBonus: isGrandProphecy ? 1.5 : undefined
   };
 }
 
@@ -173,6 +183,7 @@ export function advanceProphecyArcs(state: GameState): GameState {
   let newAdvisorMessages = [...state.advisorMessages];
   let nextFactions = state.factions;
   let nextId = state.nextId;
+  let knowledgeFromArcs = 0;
 
   updatedArcs = updatedArcs.map((arc) => {
     if (arc.status !== "active") return arc;
@@ -224,11 +235,12 @@ export function advanceProphecyArcs(state: GameState): GameState {
       // This arc just failed in this tick
       const faction = nextFactions[arc.factionId];
       if (faction) {
+        const failPenalty = Math.round(5 * (arc.grandProphecyBonus ?? 1));
         nextFactions = {
           ...nextFactions,
           [arc.factionId]: {
             ...faction,
-            credibility: Math.max(0, faction.credibility - 5)
+            credibility: Math.max(0, faction.credibility - failPenalty)
           }
         };
         newAdvisorMessages = [
@@ -246,21 +258,38 @@ export function advanceProphecyArcs(state: GameState): GameState {
     if (arc.status === "fulfilled" && !arcState.arcs.find((a) => a.id === arc.id && a.status === "fulfilled")) {
       const faction = nextFactions[arc.factionId];
       if (faction) {
+        const fulfillBonus = Math.round(4 * (arc.grandProphecyBonus ?? 1));
         nextFactions = {
           ...nextFactions,
           [arc.factionId]: {
             ...faction,
-            credibility: Math.min(100, faction.credibility + 4)
+            credibility: Math.min(100, faction.credibility + fulfillBonus)
           }
         };
       }
+      // Knowledge bonus from fulfilled arc
+      knowledgeFromArcs += 1;
     }
+  }
+
+  // Apply knowledge from fulfilled arcs
+  let nextResources = state.resources;
+  if (knowledgeFromArcs > 0 && nextResources.knowledge) {
+    nextResources = {
+      ...nextResources,
+      knowledge: {
+        ...nextResources.knowledge,
+        amount: nextResources.knowledge.amount + knowledgeFromArcs,
+        trend: knowledgeFromArcs
+      }
+    };
   }
 
   return {
     ...state,
     nextId,
     factions: nextFactions,
+    resources: nextResources,
     advisorMessages: newAdvisorMessages,
     prophecyArcs: {
       arcs: updatedArcs,
@@ -332,4 +361,224 @@ export function scanForContradictions(
   }
 
   return { contradictions: found, advisorMessages };
+}
+
+/** Resolves due follow-up obligations on active prophecy arcs -- call monthly */
+export function resolveFollowUp(state: GameState): GameState {
+  const arcState = state.prophecyArcs ?? createInitialProphecyArcState();
+  const currentDay = getAbsoluteDay(state.clock);
+
+  let nextFactions = state.factions;
+  let nextEventFeed = state.eventFeed;
+  let nextConsultation = state.consultation;
+  let changed = false;
+
+  const updatedArcs = arcState.arcs.map((arc) => {
+    if (arc.status !== "active") return arc;
+
+    const updatedFollowUps = arc.followUpObligations.map((followUp) => {
+      // Skip already-resolved or not-yet-due follow-ups
+      if (followUp.fulfilledDay !== undefined || followUp.dueDay > currentDay) return followUp;
+
+      changed = true;
+
+      if (followUp.fulfilled) {
+        // Fulfilled follow-up: credibility bonus (+2) + belief strength boost (+5)
+        const faction = nextFactions[arc.factionId];
+        if (faction) {
+          nextFactions = {
+            ...nextFactions,
+            [arc.factionId]: {
+              ...faction,
+              credibility: Math.min(100, faction.credibility + 2)
+            }
+          };
+        }
+
+        // Boost belief strength on the root prophecy record
+        const historyIndex = nextConsultation.history.findIndex((r) => r.id === arc.rootProphecyId);
+        if (historyIndex >= 0) {
+          const record = nextConsultation.history[historyIndex]!;
+          if (record.beliefStrength !== undefined) {
+            const updatedHistory = [...nextConsultation.history];
+            updatedHistory[historyIndex] = {
+              ...record,
+              beliefStrength: Math.min(100, record.beliefStrength + 5)
+            };
+            nextConsultation = { ...nextConsultation, history: updatedHistory };
+          }
+        }
+
+        nextEventFeed = [
+          {
+            id: `event-followup-fulfilled-${arc.id}-${followUp.id}`,
+            day: state.clock.day,
+            text: `The ${followUp.kind} obligation for "${arc.label}" has been fulfilled, strengthening Delphi's authority.`
+          },
+          ...nextEventFeed
+        ].slice(0, 8);
+
+        return { ...followUp, fulfilledDay: currentDay };
+      } else {
+        // Unfulfilled follow-up: credibility penalty (-3)
+        const faction = nextFactions[arc.factionId];
+        if (faction) {
+          nextFactions = {
+            ...nextFactions,
+            [arc.factionId]: {
+              ...faction,
+              credibility: Math.max(0, faction.credibility - 3)
+            }
+          };
+        }
+
+        nextEventFeed = [
+          {
+            id: `event-followup-unfulfilled-${arc.id}-${followUp.id}`,
+            day: state.clock.day,
+            text: `The ${followUp.kind} obligation for "${arc.label}" went unfulfilled. ${nextFactions[arc.factionId]?.name ?? arc.factionId}'s trust in the oracle wavers.`
+          },
+          ...nextEventFeed
+        ].slice(0, 8);
+
+        return { ...followUp, fulfilledDay: currentDay };
+      }
+    });
+
+    if (updatedFollowUps === arc.followUpObligations) return arc;
+    return { ...arc, followUpObligations: updatedFollowUps };
+  });
+
+  if (!changed) return state;
+
+  return {
+    ...state,
+    factions: nextFactions,
+    eventFeed: nextEventFeed,
+    consultation: nextConsultation,
+    prophecyArcs: {
+      ...arcState,
+      arcs: updatedArcs
+    }
+  };
+}
+
+/** Resolves unresolved contradictions on prophecy arcs -- call monthly */
+export function resolveContradictions(state: GameState): GameState {
+  const arcState = state.prophecyArcs ?? createInitialProphecyArcState();
+  const unresolvedContradictions = arcState.contradictions.filter((c) => !c.resolved);
+
+  if (unresolvedContradictions.length === 0) return state;
+
+  let nextFactions = state.factions;
+  let nextEventFeed = state.eventFeed;
+  let totalContradictions = arcState.totalContradictions;
+  let nextCampaign = state.campaign;
+
+  const updatedContradictions = arcState.contradictions.map((contradiction) => {
+    if (contradiction.resolved) return contradiction;
+
+    // Apply credibility impact (-5) to the faction that noticed the contradiction
+    // Find the arc associated with one of the prophecies to determine the faction
+    const relatedArc = arcState.arcs.find(
+      (a) => a.rootProphecyId === contradiction.prophecyIdA || a.rootProphecyId === contradiction.prophecyIdB
+    );
+    const factionId = relatedArc?.factionId;
+
+    if (factionId) {
+      const faction = nextFactions[factionId];
+      if (faction) {
+        nextFactions = {
+          ...nextFactions,
+          [factionId]: {
+            ...faction,
+            credibility: Math.max(0, faction.credibility - 5)
+          }
+        };
+      }
+    }
+
+    // Generate narrative event
+    nextEventFeed = [
+      {
+        id: `event-contradiction-resolved-${contradiction.id}`,
+        day: state.clock.day,
+        text: `A ${contradiction.severity} contradiction in Delphi's prophecies has been publicly acknowledged: ${contradiction.description}.`
+      },
+      ...nextEventFeed
+    ].slice(0, 8);
+
+    totalContradictions += 1;
+
+    // Catastrophic contradictions (oracular depth band arcs) trigger crisis chain event
+    if (contradiction.severity === "catastrophic") {
+      const targetNode = nextCampaign.worldMap.nodes.find(
+        (n) => n.controllingFactionId === factionId
+      ) ?? nextCampaign.worldMap.nodes[0];
+
+      if (targetNode) {
+        const crisisChain = {
+          id: `crisis-contradiction-${contradiction.id}`,
+          label: `Oracular Crisis: ${contradiction.description}`,
+          nodeId: targetNode.id,
+          factionId,
+          stage: "active" as const,
+          pressure: 60,
+          stepsCompleted: 0
+        };
+
+        nextCampaign = {
+          ...nextCampaign,
+          worldMap: {
+            ...nextCampaign.worldMap,
+            crisisChains: [...nextCampaign.worldMap.crisisChains, crisisChain]
+          }
+        };
+
+        nextEventFeed = [
+          {
+            id: `event-crisis-contradiction-${contradiction.id}`,
+            day: state.clock.day,
+            text: `The catastrophic contradiction has triggered a crisis of faith across the Hellenic world. Delphi's very legitimacy is questioned.`
+          },
+          ...nextEventFeed
+        ].slice(0, 8);
+      }
+    }
+
+    // Set arc status to "contradicted" for related arcs
+    return {
+      ...contradiction,
+      resolved: true,
+      resolutionReport: `Contradiction resolved on day ${state.clock.day}: ${contradiction.description}`
+    };
+  });
+
+  // Update arc statuses for contradicted arcs
+  const updatedArcs = arcState.arcs.map((arc) => {
+    if (arc.status !== "active") return arc;
+    const hasContradiction = updatedContradictions.some(
+      (c) =>
+        c.resolved &&
+        !arcState.contradictions.find((oc) => oc.id === c.id)?.resolved &&
+        (c.prophecyIdA === arc.rootProphecyId || c.prophecyIdB === arc.rootProphecyId)
+    );
+    if (hasContradiction) {
+      return { ...arc, status: "contradicted" as const };
+    }
+    return arc;
+  });
+
+  return {
+    ...state,
+    factions: nextFactions,
+    eventFeed: nextEventFeed,
+    campaign: nextCampaign,
+    prophecyArcs: {
+      ...arcState,
+      arcs: updatedArcs,
+      contradictions: updatedContradictions,
+      totalContradictions
+    }
+  };
 }

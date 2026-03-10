@@ -152,7 +152,7 @@ export function OracleOverlayPanel({ state }: { state: GameState }) {
                   Envoy Approaching
                 </div>
                 <strong>{state.consultation.current.envoyName}</strong>
-                <div className="text-xs" style={{ color: "var(--text-dim)" }}>
+                <div className="text-xs text-dim">
                   {state.factions[state.consultation.current.factionId].name}
                 </div>
                 <div className="text-xs">{state.consultation.current.question}</div>
@@ -269,6 +269,15 @@ export function OracleOverlayPanel({ state }: { state: GameState }) {
                   <StatBar label="Rest" value={state.pythia.needs.rest} />
                   <StatBar label="Purify" value={state.pythia.needs.purification} />
                 </div>
+                {state.pythia.needs.rest > 70 ? (
+                  <div className="text-xs text-red">High fatigue — tile quality reduced 15%</div>
+                ) : null}
+                {state.pythia.needs.purification > 68 ? (
+                  <div className="text-xs text-red">Purification needed — omen reliability -20%</div>
+                ) : null}
+                {(state.pythia.needs as any).food > 50 ? (
+                  <div className="text-xs text-red">Pythia hungry — depth capped at Grounded</div>
+                ) : null}
                 <div className="pythia-actions">
                   <button className="oracle-button" id="rest-pythia-btn" onClick={onRestPythia} type="button">Rest</button>
                   <button className="oracle-button" id="purify-pythia-btn" onClick={onPurifyPythia} type="button">Purify</button>
@@ -300,7 +309,7 @@ export function OracleOverlayPanel({ state }: { state: GameState }) {
               </div>
             ) : (
               <div className="sidebar-block oracle-surface-section oracle-panel-card">
-                <div className="text-xs oracle-muted-copy" style={{ fontStyle: "italic" }}>
+                <div className="text-xs oracle-muted-copy text-italic">
                   Build Priest Quarters to ordain priests
                 </div>
               </div>
@@ -338,6 +347,36 @@ export function OracleOverlayPanel({ state }: { state: GameState }) {
               ))}
             </div>
           </div>
+
+          {/* Active Prophecy Arcs */}
+          {(state as any).prophecy?.arcs?.filter((a: any) => a.status === "active").length > 0 ? (
+            <div className="sidebar-block oracle-surface-section oracle-panel-card">
+              <div className="oracle-card-header">
+                <div className="section-title">Active Prophecy Arcs</div>
+                <span className="oracle-inline-chip">
+                  {(state as any).prophecy.arcs.filter((a: any) => a.status === "active").length} active
+                </span>
+              </div>
+              {(state as any).prophecy.arcs.filter((a: any) => a.status === "active").map((arc: any) => (
+                <div key={arc.id} className="priest-row">
+                  <div className="priest-row-header">
+                    <span className="priest-row-name">{arc.domain} Prophecy Arc</span>
+                    <span className="oracle-inline-chip">{arc.depthBand}</span>
+                  </div>
+                  {arc.followUps?.filter((f: any) => !f.resolved).length > 0 ? (
+                    <div className="text-xs text-red">
+                      {arc.followUps.filter((f: any) => !f.resolved).length} pending follow-up(s)
+                    </div>
+                  ) : null}
+                  {arc.contradictions?.filter((c: any) => !c.resolved).length > 0 ? (
+                    <div className="text-xs text-red">
+                      {arc.contradictions.filter((c: any) => !c.resolved).length} unresolved contradiction(s)
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ) : null}
 
           {/* Consequences */}
           <div className="oracle-surface-section oracle-panel-card">

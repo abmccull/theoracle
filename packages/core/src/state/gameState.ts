@@ -1,6 +1,9 @@
 import type {
   BuildingDefId,
+  CityTier as ContentCityTier,
   DomainTag,
+  DifficultyId,
+  EventChainId,
   FactionAgenda,
   FactionId,
   FactionProfile,
@@ -12,18 +15,23 @@ import type {
   PhilosopherId,
   PhilosopherThreatStage as ContentPhilosopherThreatStage,
   PriestRole as ContentPriestRole,
+  PythiaArchetypeId,
   PythiaTraitId,
   ReputationTierId,
   RivalOracleId,
   RivalOracleOperationId,
   ResourceId,
   ScenarioId,
-  TileSemantics
+  TechId,
+  TileSemantics,
+  WalkerTraitId
 } from "@the-oracle/content";
 
 export type {
   BuildingDefId,
   DomainTag,
+  DifficultyId,
+  EventChainId,
   FactionAgenda,
   FactionId,
   FactionProfile,
@@ -31,15 +39,19 @@ export type {
   NamedCharacterArchetypeId,
   OriginId,
   PhilosopherId,
+  PythiaArchetypeId,
   PythiaTraitId,
   ReputationTierId,
   RivalOracleId,
   RivalOracleOperationId,
   ResourceId,
   ScenarioId,
-  TileSemantics
+  TechId,
+  TileSemantics,
+  WalkerTraitId
 };
 export type { BurdenId } from "./lineage";
+import type { TerrainDepositType } from "@the-oracle/content";
 import type { TerrainType } from "../terrain/generate";
 import type { AgeState } from "./ages";
 import type { EspionageState } from "./espionage";
@@ -88,6 +100,17 @@ export type Coord = {
   y: number;
 };
 
+export type TerrainDeposit = {
+  type: TerrainDepositType;
+  currentYield: number;
+  maxYield: number;
+  regenPerDay: number;
+  depletedDay?: number;
+  regrowthStage?: number;
+};
+
+export type ProductionPhase = "idle" | "walking_to_deposit" | "gathering" | "returning" | "processing" | "storing";
+
 export type PlacementTool = "select" | BuildingDefId;
 
 export type WorldClock = {
@@ -116,9 +139,20 @@ export type BuildingInstance = {
   maxCondition: number;
   requiresPriest: boolean;
   assignedPriestIds: string[];
+  assignedWorkerIds: string[];
   storedResources: Partial<Record<ResourceId, number>>;
   connectedToRoad: boolean;
+  /** Construction progress (0 to constructionWork). Undefined or equal to constructionWork = complete. */
+  constructionProgress?: number;
+  /** Total work units needed to finish. Undefined or 0 = already complete. */
+  constructionWork?: number;
 };
+
+/** Returns true if the building is still under construction. */
+export function isBuildingUnderConstruction(building: BuildingInstance): boolean {
+  return (building.constructionWork ?? 0) > 0
+    && (building.constructionProgress ?? 0) < building.constructionWork!;
+}
 
 export type WalkerState = "idle" | "moving" | "working" | "repairing" | "visiting" | "hauling" | "delivering";
 
@@ -139,6 +173,17 @@ export type WalkerInstance = {
   fatigue?: number;
   haulingSkill?: number;
   supplyRadius?: number;
+  productionPhase?: ProductionPhase;
+  gatherTargetTile?: Coord;
+  phaseProgress?: number;
+  phaseWork?: number;
+  gatherResourceId?: ResourceId;
+  gatherAmount?: number;
+  hungerTicks?: number;
+  traits?: WalkerTraitId[];
+  experience?: number;
+  skillLevel?: number;
+  morale?: number;
 };
 
 export type PriestSecretKind = "corruption" | "heresy" | "rivalry" | "forbidden_knowledge";
@@ -149,6 +194,14 @@ export type PriestSecret = {
   severity: number;
   discoveredDay?: number;
   exposedDay?: number;
+};
+
+export type PriestPersonality = "devout" | "ambitious" | "scholarly" | "political" | "mystical";
+
+export type PriestRelationship = {
+  targetPriestId: string;
+  sentiment: "friendly" | "neutral" | "rival";
+  strength: number; // 0-100
 };
 
 export type PriestState = {
@@ -162,6 +215,11 @@ export type PriestState = {
   homeBuildingId?: string;
   secrets?: PriestSecret[];
   successionRank?: number;
+  experience?: number; // 0-100, grows with assignments
+  personality?: PriestPersonality;
+  relationships?: Record<string, PriestRelationship>;
+  loyalty?: number; // 0-100, to the oracle
+  grievances?: string[];
 };
 
 export type PriestTemperament = "steady" | "zealous" | "cunning" | "scholarly";
@@ -227,8 +285,17 @@ export type PythiaState = {
     purification: number;
     rest: number;
     pilgrimageCooldown: number;
+    food: number;
   };
   traits: PythiaTraitId[];
+};
+
+export type FactionTrustState = "neutral" | "distrust" | "devotion";
+
+export type FactionMemory = {
+  consecutiveSuccesses: number;
+  consecutiveFailures: number;
+  trustState: FactionTrustState;
 };
 
 export type FactionState = {
@@ -248,6 +315,7 @@ export type FactionState = {
   tradeAccess: boolean;
   lastOutcome?: string;
   history: string[];
+  memory?: FactionMemory;
 };
 
 export type PhilosopherThreatLevel = "dormant" | PhilosopherThreatStage;
@@ -291,6 +359,8 @@ export type RivalOracleIncident = {
   summary: string;
 };
 
+export type RivalStrategy = "aggressive" | "subversive" | "diplomatic";
+
 export type RivalOracleState = {
   id: RivalOracleId;
   name: string;
@@ -309,6 +379,10 @@ export type RivalOracleState = {
   lastKnownOperationId?: RivalOracleOperationId;
   lastTargetRegionId?: string;
   operations: RivalOracleOperationState[];
+  strategy?: RivalStrategy;
+  currentOperationNarrative?: string;
+  weaknessKnown?: boolean;
+  vulnerabilityDomain?: DomainTag;
 };
 
 export type RivalOraclesState = {
@@ -340,6 +414,14 @@ export type CharacterMemoryState = {
 
 export type NamedCharacterStatus = "active" | "dormant" | "legendary";
 
+export type CharacterArc = {
+  arcId: string;
+  stage: number; // 0-based, which visit we're on
+  totalStages: number;
+  narrative: string;
+  resolved: boolean;
+};
+
 export type NamedCharacterState = {
   id: string;
   defId: NamedCharacterArchetypeId;
@@ -357,6 +439,7 @@ export type NamedCharacterState = {
   tags: string[];
   relationship: CharacterRelationshipState;
   memory: CharacterMemoryState;
+  currentArc?: CharacterArc;
 };
 
 export type CharactersState = {
@@ -397,6 +480,20 @@ export type ProphecyInterpretation = {
   rivalContext?: string | null;
 };
 
+export type ProphecyReinterpretationSpin = "supportive" | "hostile" | "exploitative" | "dismissive";
+
+export type ProphecyReinterpretation = {
+  id: string;
+  prophecyId: string;
+  factionId: FactionId;
+  originalFactionId: FactionId;
+  spin: ProphecyReinterpretationSpin;
+  narrative: string;
+  credibilityImpact: number;
+  behaviorShift?: FactionAgenda;
+  dayCreated: number;
+};
+
 export type ProphecyRecord = {
   id: string;
   factionId: FactionId;
@@ -418,6 +515,8 @@ export type ProphecyRecord = {
   resolvedDay?: number;
   resolutionReport?: string;
   credibilityDelta?: number;
+  beliefStrength?: number;
+  reinterpretations?: ProphecyReinterpretation[];
 };
 
 export type ConsequenceCase = {
@@ -548,6 +647,12 @@ export type CrisisChainState = {
   resolvedDay?: number;
 };
 
+export type ProgressionMilestones = {
+  buildingMilestones: number[];
+  factionTrustMilestones: string[];
+  ageMilestones: string[];
+};
+
 export type CampaignState = {
   scenarioId: ScenarioId;
   reputation: ReputationState;
@@ -567,6 +672,12 @@ export type CampaignState = {
     summary?: string;
     completedDay?: number;
   };
+  grandConsultationActive?: boolean;
+  sacredPilgrimage?: {
+    priestId: string;
+    returnDay: number;
+  };
+  milestones?: ProgressionMilestones;
 };
 
 export type LegendaryConsultationProgress = {
@@ -577,9 +688,113 @@ export type LegendaryConsultationProgress = {
   completedDay?: number;
 };
 
+export type ResearchState = {
+  knowledgeAccumulated: number;
+  activeTechId?: TechId;
+  activeTechProgress: number;
+  completedTechIds: TechId[];
+};
+
+export type ActiveEventChain = {
+  id: string;
+  defId: EventChainId;
+  currentStageId: string;
+  startDay: number;
+  stageStartDay: number;
+  factionId?: FactionId;
+  pendingChoice?: boolean;
+  choiceMade?: "a" | "b";
+  resolved: boolean;
+  resolvedDay?: number;
+};
+
+export type TreatyKind = "trade_access" | "mutual_defense" | "consultation_priority";
+
+export type Treaty = {
+  id: string;
+  factionId: FactionId;
+  kind: TreatyKind;
+  goldPerMonth: number;
+  startDay: number;
+  active: boolean;
+  obligationsMet: boolean;
+};
+
+export type FactionDemandType = "tribute" | "exclusive_consultation" | "favorable_reading" | "resource_access";
+
+export type FactionDemand = {
+  id: string;
+  factionId: FactionId;
+  demandType: FactionDemandType;
+  description: string;
+  goldAmount?: number;
+  dayIssued: number;
+  expiresDay: number;
+  resolved: boolean;
+};
+
+export type MarketState = {
+  priceIndex: Partial<Record<ResourceId, number>>;
+  supplyPressure: Partial<Record<ResourceId, number>>;
+  demandPressure: Partial<Record<ResourceId, number>>;
+  lastUpdateMonth: number;
+};
+
+export type PatronContract = {
+  id: string;
+  factionId: FactionId;
+  characterId?: string;
+  goldPerMonth: number;
+  demandedDomain: DomainTag;
+  demandedPolarity: "favorable" | "any";
+  satisfactionScore: number;
+  startDay: number;
+  durationMonths: number;
+  active: boolean;
+};
+
+export type Loan = {
+  id: string;
+  factionId: FactionId;
+  principalGold: number;
+  interestRate: number;
+  remainingPayments: number;
+  monthlyPayment: number;
+  startDay: number;
+  missedPayments: number;
+};
+
+export type ActiveFestival = {
+  defId: string;
+  startDay: number;
+  endDay: number;
+  resourcesMet: boolean;
+  resolved: boolean;
+};
+
+export type AchievementProgress = {
+  unlockedIds: string[];
+  stats: {
+    propheciesDelivered: number;
+    yearsCompleted: number;
+    festivalsSucceeded: number;
+    espionageSuccesses: number;
+    espionageDetections: number;
+    treatiesFormed: number;
+    warsStayedNeutral: number;
+    highestBeliefStrength: number;
+    totalPatrons: number;
+    hadDebt: boolean;
+  };
+};
+
+export type WeatherCondition = "normal" | "drought" | "flood" | "harsh_winter" | "heat_wave";
+
 export type GameEvent =
   | { type: "DayAdvanced"; day: number }
+  | { type: "TechResearched"; techId: TechId }
   | { type: "BuildingPlaced"; buildingId: string; defId: BuildingDefId }
+  | { type: "ConstructionComplete"; buildingId: string; defId: BuildingDefId }
   | { type: "WalkerAssigned"; walkerId: string; buildingId: string }
   | { type: "ResourceConsumed"; resourceId: ResourceId; amount: number }
   | { type: "BuildingDegraded"; buildingId: string; condition: number }
@@ -589,18 +804,56 @@ export type GameEvent =
   | { type: "ConsequenceResolved"; consequenceId: string; factionId: FactionId; delta: number }
   | { type: "RivalOracleOperation"; rivalId: RivalOracleId; operationId: RivalOracleOperationId; day: number }
   | { type: "TradePurchased"; offerId: string; resourceId: ResourceId; amount: number }
-  | { type: "AutosaveTriggered"; day: number };
+  | { type: "AutosaveTriggered"; day: number }
+  | { type: "EventChainAdvanced"; chainId: string; stageId: string }
+  | { type: "EventChainCompleted"; chainId: string; defId: EventChainId }
+  | { type: "DepositDepleted"; tileKey: string; depositType: TerrainDepositType }
+  | { type: "ResourceProduced"; resourceId: ResourceId; amount: number; buildingId: string }
+  | { type: "ResourceSold"; resourceId: ResourceId; amount: number; goldEarned: number; factionId: FactionId }
+  | { type: "BuildingDemolished"; buildingId: string; defId: BuildingDefId; goldReturned: number }
+  | { type: "TradeOfferGenerated"; offerId: string; factionId: FactionId; resourceId: ResourceId };
 
 export type GameSnapshot = {
-  version: 1;
+  version: 1 | 2;
   state: GameState;
   recentEvents: GameEvent[];
 };
+
+export type RunConfig = {
+  scenarioId: ScenarioId;
+  difficultyId: DifficultyId;
+  pythiaArchetypeId: PythiaArchetypeId;
+  startingRegionId: string;
+};
+
+export type CityTier = ContentCityTier;
+
+export type CityProsperity = {
+  prosperityScore: number;      // 0-100, derived monthly
+  pilgrimAttraction: number;    // 0-100, drives visitor flow
+  tradeRevenue: number;         // gold/month from trade_income buildings
+  donationRevenue: number;      // gold/month from donation buildings
+  visitorCount: number;         // current visitors in city
+  visitorCapacity: number;      // from pilgrim_capacity passive effects
+  growthRate: number;           // population growth modifier
+  cityTier: CityTier;
+};
+
+export type OracleImpactEvent =
+  | { kind: "prophecy_success_streak" }
+  | { kind: "prophecy_failure_streak" }
+  | { kind: "reputation_tier_up" }
+  | { kind: "reputation_tier_down" }
+  | { kind: "crisis_resolved" }
+  | { kind: "crisis_escalated" }
+  | { kind: "festival_success" }
+  | { kind: "festival_failure" };
 
 export type GameState = {
   worldSeed: number;
   worldSeedText: string;
   originId: OriginId;
+  runConfig: RunConfig;
   worldGeneration: WorldGenerationState;
   clock: WorldClock;
   grid: {
@@ -608,6 +861,7 @@ export type GameState = {
     height: number;
     roads: Coord[];
     terrainOverrides?: Record<string, TerrainType>;
+    terrainDeposits?: Record<string, TerrainDeposit>;
   };
   resources: Record<ResourceId, ResourceState>;
   buildings: BuildingInstance[];
@@ -626,7 +880,19 @@ export type GameState = {
   prophecyArcs?: ProphecyArcState;
   worldHistory?: WorldHistoryState;
   lineage?: LineageState;
+  research?: ResearchState;
+  eventChains?: ActiveEventChain[];
+  market?: MarketState;
+  patrons?: PatronContract[];
+  loans?: Loan[];
+  treaties?: Treaty[];
+  demands?: FactionDemand[];
+  festivals?: ActiveFestival[];
+  weather?: WeatherCondition;
+  lastFestivalCheck?: number;
   endlessMode?: boolean;
+  achievements?: AchievementProgress;
+  cityProsperity?: CityProsperity;
   activeBurdens?: BurdenId[];
   legendaryProgress?: LegendaryConsultationProgress[];
   availableLegendary?: LegendaryConsultationId[];
@@ -643,6 +909,8 @@ export type GameState = {
     activeTool: PlacementTool;
     hoveredTile?: Coord;
   };
+  advisorHistory?: Record<string, string[]>;
+  advisorAccuracy?: Record<string, { correct: number; total: number }>;
   lastAutosaveDay: number;
   nextId: number;
 };

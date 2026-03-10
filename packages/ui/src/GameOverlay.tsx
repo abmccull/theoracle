@@ -1,4 +1,5 @@
 import React, { useEffect } from "react";
+import { Icon } from "./Icons";
 
 type GameOverlayProps = {
   title: string;
@@ -30,7 +31,7 @@ export function GameOverlay({ title, onClose, children, width = "medium" }: Game
         <div className="game-overlay-header">
           <h2>{title}</h2>
           <button className="game-overlay-close" onClick={onClose} type="button" aria-label="Close overlay">
-            {"\u2715"}
+            <Icon name="close" size={16} />
           </button>
         </div>
         <div className="game-overlay-content">{children}</div>

@@ -1,10 +1,12 @@
-import type { BuildingDefId } from "@the-oracle/content";
-import { buildingDefs, legendaryConsultationDefs } from "@the-oracle/content";
+import type { BuildingDefId, TechDef, TechId, WalkerTraitId } from "@the-oracle/content";
+import { buildingDefs, eventChainDefById, legendaryConsultationDefs, techDefById, techDefs, WALKER_TRAIT_IDS } from "@the-oracle/content";
 
-import type { GameEvent, GameState, LegendaryConsultationProgress, PriestCouncilBlocId } from "../state/gameState";
-import { canPlaceBuilding, isFootprintAdjacentToRoad, getOccupiedTiles } from "../terrain/footprint";
+import type { GameEvent, GameState, Loan, LegendaryConsultationProgress, PatronContract, PriestCouncilBlocId, Treaty, FactionDemand } from "../state/gameState";
+import { isBuildingUnderConstruction } from "../state/gameState";
+import { canPlaceBuilding, isFootprintAdjacentToRoad } from "../terrain/footprint";
+import { hasDepositInRange } from "../terrain/deposits";
 import { isBuildableTerrain, resolveTileTerrain } from "../terrain/generate";
-import type { EspionageAgent, EspionageOperation, EspionageOperationKind } from "../state/espionage";
+import type { EspionageAgent, EspionageAgentTrait, EspionageOperation, EspionageOperationKind } from "../state/espionage";
 import { createInitialEspionageState } from "../state/espionage";
 import type { ExcavationSite, Relic, SacredSite } from "../state/excavation";
 import { createInitialState } from "../state/initialState";
@@ -12,7 +14,8 @@ import { syncCampaignState } from "../state/campaign";
 import {
   buildProphecyDepthSummary,
   buildProphecyInterpretation,
-  buildProphecyScaffold
+  buildProphecyScaffold,
+  selectPopulationSummary
 } from "../selectors";
 import { getAbsoluteDay } from "../simulation/clock";
 import { createBuildingAt } from "../simulation/updateDay";
@@ -24,6 +27,8 @@ import {
   scorePlacedTiles
 } from "../simulation/events";
 import { createProphecyArc, scanForContradictions } from "../simulation/prophecyArcs";
+import { interrogateAgent } from "../simulation/espionage";
+import { generateReinterpretations } from "../simulation/prophecyFeedback";
 import { createInitialLegacyState, computeLegacyScore, generateLegacyArtifact } from "../state/legacy";
 import { createInitialLineageState, recordRunInLineage, burdenDefById } from "../state/lineage";
 import type { BurdenId } from "../state/lineage";
@@ -45,10 +50,6 @@ function isTileOpen(state: GameState, tile: { x: number; y: number }): boolean {
   return !roadTaken && !buildingTaken;
 }
 
-function isAdjacentToRoad(state: GameState, tile: { x: number; y: number }): boolean {
-  return state.grid.roads.some((road) => Math.abs(road.x - tile.x) + Math.abs(road.y - tile.y) === 1);
-}
-
 function nextStateWithEvent(state: GameState, eventText: string): GameState {
   return {
     ...state,
@@ -62,6 +63,32 @@ function nextStateWithEvent(state: GameState, eventText: string): GameState {
       ...state.eventFeed
     ].slice(0, 8)
   };
+}
+
+/** Returns the set of building IDs unlocked by completed tech effects. */
+function getUnlockedBuildingIds(state: GameState): Set<string> {
+  const ids = new Set<string>();
+  const completedTechs = state.research?.completedTechIds ?? [];
+  for (const techId of completedTechs) {
+    const tech = techDefById[techId];
+    if (!tech) continue;
+    for (const effect of tech.effects) {
+      if (effect.kind === "unlock_building") {
+        ids.add(effect.buildingId);
+      }
+    }
+  }
+  return ids;
+}
+
+/** Returns true if a building requires a tech unlock_building effect and the player has it. */
+function isBuildingTechUnlocked(state: GameState, defId: string): boolean {
+  // Check if any tech has an unlock_building effect for this building
+  const needsUnlock = techDefs.some((tech) =>
+    tech.effects.some((e) => e.kind === "unlock_building" && e.buildingId === defId)
+  );
+  if (!needsUnlock) return true; // No tech gates this building
+  return getUnlockedBuildingIds(state).has(defId);
 }
 
 function appendFactionHistory(state: GameState, factionId: keyof GameState["factions"], text: string): GameState["factions"] {
@@ -526,23 +553,74 @@ export function reduceCommand(state: GameState, command: GameCommand): { state: 
       ) {
         return { state, events };
       }
+
+      // Check tech requirement (explicit requiredTech on building def)
+      if (def.requiredTech) {
+        const completedTechs = nextState.research?.completedTechIds ?? [];
+        if (!completedTechs.includes(def.requiredTech)) {
+          return { state, events };
+        }
+      }
+
+      // Check unlock_building tech effect requirement
+      if (!isBuildingTechUnlocked(nextState, command.defId)) {
+        return { state, events };
+      }
+
+      // Check terrain deposit proximity requirement
+      if (def.requiredNearbyTerrain) {
+        const deposits = nextState.grid.terrainDeposits ?? {};
+        if (!hasDepositInRange(deposits, command.tile, def.requiredNearbyTerrain.depositType, def.requiredNearbyTerrain.maxDistance)) {
+          return { state, events };
+        }
+      }
+
+      // Check gold affordability
+      if (nextState.resources.gold.amount < def.costGold) {
+        return { state, events };
+      }
+
+      // Check material resource affordability
+      const costResources = def.costResources ?? {};
+      for (const [resourceId, amount] of Object.entries(costResources)) {
+        if ((nextState.resources[resourceId as keyof typeof nextState.resources] as { amount: number } | undefined)?.amount ?? 0 < (amount ?? 0)) {
+          return { state, events };
+        }
+      }
+
       const buildingId = `building-${nextState.nextId}`;
       const building = createBuildingAt(command.defId, command.tile, buildingId);
+      const underConstruction = isBuildingUnderConstruction(building);
+
+      // Deduct gold
+      let updatedResources = {
+        ...nextState.resources,
+        gold: {
+          ...nextState.resources.gold,
+          amount: Math.max(0, nextState.resources.gold.amount - def.costGold),
+          trend: -def.costGold
+        }
+      };
+
+      // Deduct material costs
+      for (const [resourceId, amount] of Object.entries(costResources)) {
+        const key = resourceId as keyof typeof updatedResources;
+        const current = updatedResources[key] as { amount: number; capacity: number; trend: number };
+        if (current) {
+          updatedResources = {
+            ...updatedResources,
+            [key]: { ...current, amount: Math.max(0, current.amount - (amount ?? 0)) }
+          };
+        }
+      }
+
       nextState = {
         ...nextState,
         buildings: [...nextState.buildings, building],
         nextId: nextState.nextId + 1,
-        resources: applyStartingResourceLedger({
-          ...nextState,
-          resources: {
-            ...nextState.resources,
-            gold: {
-              ...nextState.resources.gold,
-              amount: Math.max(0, nextState.resources.gold.amount - def.costGold),
-              trend: -def.costGold
-            }
-          }
-        }, building.storedResources)
+        resources: underConstruction
+          ? updatedResources
+          : applyStartingResourceLedger({ ...nextState, resources: updatedResources }, building.storedResources)
       };
 
       if (command.defId === "priest_quarters" && !nextState.priests[0]?.homeBuildingId) {
@@ -559,7 +637,7 @@ export function reduceCommand(state: GameState, command: GameCommand): { state: 
         };
       }
 
-      nextState = nextStateWithEvent(nextState, `${def.name} completed.`);
+      nextState = nextStateWithEvent(nextState, underConstruction ? `${def.name} construction begun.` : `${def.name} completed.`);
       events.push({ type: "BuildingPlaced", buildingId, defId: command.defId });
       break;
     }
@@ -796,8 +874,24 @@ export function reduceCommand(state: GameState, command: GameCommand): { state: 
       });
       const faction = nextState.factions[currentConsultation.factionId];
       const diplomaticBonus = nextState.pythia.traits.includes("diplomatic") ? 1 : 0;
-      const credibilityDelta = score.value >= 60 && score.risk < 75 ? 8 + diplomaticBonus : score.risk >= 85 ? -6 : 3 + diplomaticBonus;
+      let credibilityDelta = score.value >= 60 && score.risk < 75 ? 8 + diplomaticBonus : score.risk >= 85 ? -6 : 3 + diplomaticBonus;
+      // Apply credibility_bonus from completed techs (only to positive gains)
+      if (credibilityDelta > 0) {
+        let credibilityMultiplier = 1;
+        for (const techId of nextState.research?.completedTechIds ?? []) {
+          const td = techDefById[techId];
+          if (!td) continue;
+          for (const eff of td.effects) {
+            if (eff.kind === "credibility_bonus") credibilityMultiplier *= eff.multiplier;
+          }
+        }
+        credibilityDelta = Math.round(credibilityDelta * credibilityMultiplier);
+      }
       const consequence = createConsequence(nextState, prophecyId, currentConsultation.factionId, record.semantics);
+      // --- Prophecy Feedback: set initial belief strength and generate reinterpretations ---
+      const initialBeliefStrength = record.clarity ?? 50;
+      const reinterpretations = generateReinterpretations(nextState, { ...record, interpretation });
+
       const consultationNote = `Day ${nextState.clock.day}: Delphi answered ${faction.name} with a ${score.risk >= 80 ? "dangerously specific" : score.value >= 70 ? "persuasive" : "guarded"} prophecy.`;
       const factionsWithHistory = appendFactionHistory(nextState, faction.id, consultationNote);
       const observerReactions = evaluateDeliveryObservers(nextState, faction.id, record.semantics, score);
@@ -824,7 +918,7 @@ export function reduceCommand(state: GameState, command: GameCommand): { state: 
         },
         consultation: {
           mode: "idle",
-          history: [{ ...record, interpretation }, ...nextState.consultation.history],
+          history: [{ ...record, interpretation, beliefStrength: initialBeliefStrength, reinterpretations }, ...nextState.consultation.history],
           current: undefined
         },
         consequences: [consequence, ...nextState.consequences],
@@ -853,6 +947,25 @@ export function reduceCommand(state: GameState, command: GameCommand): { state: 
       }
       events.push({ type: "ProphecyDelivered", prophecyId: record.id, factionId: record.factionId });
       events.push({ type: "CredibilityChanged", factionId: faction.id, delta: credibilityDelta });
+
+      // --- Knowledge generation from consultation depth ---
+      let knowledgeFromDepth = 0;
+      if (depthSummary.depthBand === "deep") knowledgeFromDepth = 1;
+      else if (depthSummary.depthBand === "oracular") knowledgeFromDepth = 2;
+      if (knowledgeFromDepth > 0) {
+        nextState = {
+          ...nextState,
+          resources: {
+            ...nextState.resources,
+            knowledge: {
+              ...nextState.resources.knowledge,
+              amount: nextState.resources.knowledge.amount + knowledgeFromDepth,
+              trend: knowledgeFromDepth
+            }
+          }
+        };
+        nextState = nextStateWithEvent(nextState, `${depthSummary.depthBand === "oracular" ? "Oracular" : "Deep"} prophecy yields +${knowledgeFromDepth} knowledge.`);
+      }
 
       // --- Prophecy Arc creation ---
       const fullRecord = { ...record, interpretation };
@@ -997,7 +1110,11 @@ export function reduceCommand(state: GameState, command: GameCommand): { state: 
     case "StartNewRunCommand": {
       nextState = createInitialState({
         seed: command.seed ?? state.worldSeedText ?? state.worldSeed,
-        originId: command.originId ?? state.originId
+        originId: command.originId ?? state.originId,
+        scenarioId: command.scenarioId ?? state.runConfig.scenarioId,
+        difficultyId: command.difficultyId ?? state.runConfig.difficultyId,
+        pythiaArchetypeId: command.pythiaArchetypeId ?? state.runConfig.pythiaArchetypeId,
+        startingRegionId: command.startingRegionId ?? state.runConfig.startingRegionId
       });
       break;
     }
@@ -1239,6 +1356,9 @@ export function reduceCommand(state: GameState, command: GameCommand): { state: 
         ...relic,
         discoveredDay: nextState.clock.day
       };
+      // Add to claimed relics collection
+      const newClaimedRelics = [...(excavation.claimedRelics ?? []), claimedRelic];
+
       nextState = {
         ...nextState,
         excavation: {
@@ -1258,13 +1378,29 @@ export function reduceCommand(state: GameState, command: GameCommand): { state: 
           relics: [
             ...excavation.relics.filter((r) => r.id !== layer.relicId),
             claimedRelic
-          ]
+          ],
+          claimedRelics: newClaimedRelics
         }
       };
       nextState = nextStateWithEvent(
         nextState,
         `Relic claimed: ${claimedRelic.name} (${claimedRelic.kind}) — ${claimedRelic.effect.type.replace(/_/g, " ")} +${claimedRelic.effect.value}.`
       );
+
+      // Check collection milestones
+      const milestoneLabels = [
+        { count: 3, label: "Curious Collection" },
+        { count: 6, label: "Notable Archive" },
+        { count: 10, label: "Renowned Treasury" },
+        { count: 15, label: "Legendary Vault" }
+      ];
+      const milestone = milestoneLabels.find((m) => m.count === newClaimedRelics.length);
+      if (milestone) {
+        nextState = nextStateWithEvent(
+          nextState,
+          `Collection milestone reached: "${milestone.label}" (${milestone.count} relics)!`
+        );
+      }
       break;
     }
     case "ActivateSacredSiteCommand": {
@@ -1394,23 +1530,35 @@ export function reduceCommand(state: GameState, command: GameCommand): { state: 
       break;
     }
     case "RecruitAgentCommand": {
-      const recruitCost = 25;
+      const espionageState = nextState.espionage ?? createInitialEspionageState();
+      const agentNames = ["Melas", "Kyra", "Nikos", "Thais", "Damastes", "Phila", "Ariston", "Korinna", "Dromon", "Eudoxia"];
+      const nameIndex = (nextState.worldSeed + nextState.nextId * 7) % agentNames.length;
+      const AGENT_TRAITS: EspionageAgentTrait[] = ["silver_tongue", "shadow_walker", "code_breaker", "double_agent", "master_of_disguise"];
+      const traitRoll = (nextState.worldSeed + nextState.nextId * 29) % 100;
+      const assignedTrait: EspionageAgentTrait | undefined = traitRoll < 30
+        ? AGENT_TRAITS[(nextState.worldSeed + nextState.nextId * 31) % AGENT_TRAITS.length]
+        : undefined;
+      const agentSkill = 30 + ((nextState.worldSeed + nextState.nextId * 13) % 30);
+      // Recruitment cost: base 15 + skill * 0.5
+      const recruitCost = Math.round(15 + agentSkill * 0.5);
       if (nextState.resources.gold.amount < recruitCost) {
         nextState = nextStateWithEvent(nextState, `Cannot recruit agent: requires ${recruitCost} gold.`);
         return { state: nextState, events };
       }
-      const espionageState = nextState.espionage ?? createInitialEspionageState();
-      const agentNames = ["Melas", "Kyra", "Nikos", "Thais", "Damastes", "Phila", "Ariston", "Korinna", "Dromon", "Eudoxia"];
-      const nameIndex = (nextState.worldSeed + nextState.nextId * 7) % agentNames.length;
       const newAgent: EspionageAgent = {
         id: `agent-${nextState.nextId}`,
         name: agentNames[nameIndex]!,
         cover: command.cover,
         targetFactionId: command.targetFactionId,
-        skill: 30 + ((nextState.worldSeed + nextState.nextId * 13) % 30),
+        skill: agentSkill,
         loyalty: 50 + ((nextState.worldSeed + nextState.nextId * 19) % 30),
         compromised: false,
-        recruitedDay: nextState.clock.day
+        recruitedDay: nextState.clock.day,
+        morale: 60,
+        experience: 0,
+        trait: assignedTrait,
+        status: "available",
+        missionCooldownDays: 5
       };
       nextState = {
         ...nextState,
@@ -1430,6 +1578,176 @@ export function reduceCommand(state: GameState, command: GameCommand): { state: 
         }
       };
       nextState = nextStateWithEvent(nextState, `A new agent, ${newAgent.name}, has been recruited as a ${command.cover} targeting ${command.targetFactionId}.`);
+      break;
+    }
+    case "DeployAgentCommand": {
+      const espionageDeploy = nextState.espionage ?? createInitialEspionageState();
+      const deployAgent = espionageDeploy.agents.find((a) => a.id === command.agentId);
+      if (!deployAgent) {
+        return { state, events };
+      }
+      // Check agent is available (support both old agents without status and new ones)
+      const agentStatus = deployAgent.status ?? (deployAgent.compromised ? "compromised" : "available");
+      if (agentStatus !== "available") {
+        nextState = nextStateWithEvent(nextState, `Agent ${deployAgent.name} is not available for deployment (${agentStatus}).`);
+        return { state: nextState, events };
+      }
+      // Check cooldown
+      if (deployAgent.lastMissionDay !== undefined && deployAgent.missionCooldownDays !== undefined) {
+        const cooldownEnd = deployAgent.lastMissionDay + deployAgent.missionCooldownDays;
+        if (nextState.clock.day < cooldownEnd) {
+          nextState = nextStateWithEvent(nextState, `Agent ${deployAgent.name} is still resting from their last mission.`);
+          return { state: nextState, events };
+        }
+      }
+      // Check no active operation
+      const alreadyDeployed = espionageDeploy.operations.some((op) => op.agentId === command.agentId && op.status === "active");
+      if (alreadyDeployed) {
+        return { state, events };
+      }
+      const deployDurationMap: Record<EspionageOperationKind, number> = {
+        intercept_prophecy: 5,
+        plant_false_omen: 7,
+        recruit_informant: 10,
+        sabotage_rival: 8,
+        protect_oracle: 6,
+        seed_philosopher: 12
+      };
+      // Pre-calculate success chance and detection risk
+      const rivalIntelDeploy = nextState.rivalOracles?.roster.find((r) => r.id === command.targetId)?.intel ?? 30;
+      const moraleModDeploy = ((deployAgent.morale ?? 60) - 50) * 0.003;
+      const expModDeploy = (deployAgent.experience ?? 0) * 0.002;
+      let traitBonusDeploy = 0;
+      if (deployAgent.trait === "silver_tongue" && command.operationKind === "recruit_informant") traitBonusDeploy = 0.15;
+      if (deployAgent.trait === "code_breaker" && command.operationKind === "intercept_prophecy") traitBonusDeploy = 0.25;
+      if (deployAgent.trait === "double_agent" && command.operationKind === "sabotage_rival") traitBonusDeploy = 0.10;
+      const baseSuccessDeploy = (deployAgent.skill * 0.6 + espionageDeploy.networkStrength * 0.2 - rivalIntelDeploy * 0.3) / 100;
+      const successChance = Math.max(0.15, Math.min(0.85, baseSuccessDeploy + 0.3 + moraleModDeploy + expModDeploy + traitBonusDeploy));
+      let detectionReductionDeploy = 0;
+      if (deployAgent.trait === "shadow_walker") detectionReductionDeploy = -0.20;
+      if (deployAgent.trait === "master_of_disguise") detectionReductionDeploy = -0.15;
+      const baseDetectionDeploy = (rivalIntelDeploy * 0.4 - deployAgent.skill * 0.25 - espionageDeploy.networkStrength * 0.1) / 100;
+      const detectionRisk = Math.max(0.05, Math.min(0.5, baseDetectionDeploy + 0.1 + detectionReductionDeploy));
+
+      const deployOperation: EspionageOperation = {
+        id: `espionage-op-${nextState.nextId}`,
+        kind: command.operationKind,
+        agentId: command.agentId,
+        targetId: command.targetId,
+        startDay: nextState.clock.day,
+        duration: deployDurationMap[command.operationKind],
+        status: "active",
+        successChance,
+        detectionRisk,
+        narrative: [`Agent ${deployAgent.name} has been deployed on a ${command.operationKind.replace(/_/g, " ")} mission.`]
+      };
+      nextState = {
+        ...nextState,
+        nextId: nextState.nextId + 1,
+        espionage: {
+          ...espionageDeploy,
+          operations: [...espionageDeploy.operations, deployOperation],
+          agents: espionageDeploy.agents.map((a) =>
+            a.id === command.agentId
+              ? { ...a, status: "deployed" as const }
+              : a
+          )
+        }
+      };
+      nextState = nextStateWithEvent(nextState, `Agent ${deployAgent.name} deployed on a ${command.operationKind.replace(/_/g, " ")} operation.`);
+      break;
+    }
+    case "RecallAgentCommand": {
+      const espionageRecall = nextState.espionage ?? createInitialEspionageState();
+      const recallAgent = espionageRecall.agents.find((a) => a.id === command.agentId);
+      if (!recallAgent) {
+        return { state, events };
+      }
+      // Abort any active operation
+      const activeOp = espionageRecall.operations.find((op) => op.agentId === command.agentId && op.status === "active");
+      const updatedOps = activeOp
+        ? espionageRecall.operations.map((op) =>
+            op.id === activeOp.id ? { ...op, status: "failed" as const, result: "Operation aborted: agent recalled." } : op
+          )
+        : espionageRecall.operations;
+      nextState = {
+        ...nextState,
+        espionage: {
+          ...espionageRecall,
+          operations: updatedOps,
+          agents: espionageRecall.agents.map((a) =>
+            a.id === command.agentId
+              ? {
+                  ...a,
+                  status: "available" as const,
+                  morale: Math.max(0, (a.morale ?? 60) - 5),
+                  lastMissionDay: nextState.clock.day
+                }
+              : a
+          )
+        }
+      };
+      nextState = nextStateWithEvent(nextState, `Agent ${recallAgent.name} has been recalled from their mission.`);
+      break;
+    }
+    case "RansomAgentCommand": {
+      const espionageRansom = nextState.espionage ?? createInitialEspionageState();
+      const ransomAgent = espionageRansom.agents.find((a) => a.id === command.agentId);
+      if (!ransomAgent) {
+        return { state, events };
+      }
+      const ransomStatus = ransomAgent.status ?? (ransomAgent.compromised ? "compromised" : "available");
+      if (ransomStatus !== "captured") {
+        nextState = nextStateWithEvent(nextState, `Agent ${ransomAgent.name} is not captured and cannot be ransomed.`);
+        return { state: nextState, events };
+      }
+      // Ransom cost: 10 + experience * 0.5
+      const ransomCost = Math.round(10 + (ransomAgent.experience ?? 0) * 0.5);
+      if (nextState.resources.gold.amount < ransomCost) {
+        nextState = nextStateWithEvent(nextState, `Cannot ransom agent: requires ${ransomCost} gold.`);
+        return { state: nextState, events };
+      }
+      nextState = {
+        ...nextState,
+        resources: {
+          ...nextState.resources,
+          gold: {
+            ...nextState.resources.gold,
+            amount: nextState.resources.gold.amount - ransomCost,
+            trend: -ransomCost
+          }
+        },
+        espionage: {
+          ...espionageRansom,
+          agents: espionageRansom.agents.map((a) =>
+            a.id === command.agentId
+              ? {
+                  ...a,
+                  status: "available" as const,
+                  compromised: false,
+                  loyalty: Math.max(0, a.loyalty - 15),
+                  morale: Math.max(0, (a.morale ?? 60) - 20)
+                }
+              : a
+          )
+        }
+      };
+      nextState = nextStateWithEvent(nextState, `Agent ${ransomAgent.name} has been ransomed for ${ransomCost} gold.`);
+      break;
+    }
+    case "InterrogateAgentCommand": {
+      const espionageInterrogate = nextState.espionage ?? createInitialEspionageState();
+      const interrogateTarget = espionageInterrogate.agents.find((a) => a.id === command.agentId);
+      if (!interrogateTarget) {
+        return { state, events };
+      }
+      const interrogateStatus = interrogateTarget.status ?? (interrogateTarget.compromised ? "compromised" : "available");
+      if (interrogateStatus !== "captured") {
+        nextState = nextStateWithEvent(nextState, `Agent ${interrogateTarget.name} is not captured and cannot be interrogated.`);
+        return { state: nextState, events };
+      }
+      // Delegate to the interrogation function
+      nextState = interrogateAgent(nextState, command.agentId);
       break;
     }
     case "TriggerEndOfRunCommand": {
@@ -1658,6 +1976,73 @@ export function reduceCommand(state: GameState, command: GameCommand): { state: 
           case "short_seasons":
             // Effect is checked in decline.ts — lower thresholds
             break;
+          case "hostile_philosophers": {
+            if (burdenedState.philosophers) {
+              const nextByFaction = { ...burdenedState.philosophers.byFaction };
+              for (const fid of Object.keys(nextByFaction) as Array<keyof typeof nextByFaction>) {
+                const threat = nextByFaction[fid];
+                nextByFaction[fid] = {
+                  ...threat,
+                  pressure: Math.min(100, Math.round(threat.pressure * 1.2)),
+                  influence: Math.min(100, Math.round(threat.influence * 1.2))
+                };
+              }
+              burdenedState = {
+                ...burdenedState,
+                philosophers: {
+                  ...burdenedState.philosophers,
+                  byFaction: nextByFaction
+                }
+              };
+            }
+            break;
+          }
+          case "unstable_weather":
+            // Effect is checked in festivals.ts — more severe weather events
+            break;
+          case "aggressive_patrons": {
+            // Patron satisfaction starts lower
+            const updatedPatrons = (burdenedState.patrons ?? []).map((p) => ({
+              ...p,
+              satisfactionScore: Math.max(0, p.satisfactionScore - 20)
+            }));
+            burdenedState = { ...burdenedState, patrons: updatedPatrons };
+            break;
+          }
+          case "expensive_construction":
+            // Effect is checked in building placement — costs +30%
+            break;
+          case "weak_spring": {
+            burdenedState = {
+              ...burdenedState,
+              resources: {
+                ...burdenedState.resources,
+                sacred_water: {
+                  ...burdenedState.resources.sacred_water,
+                  capacity: Math.floor(burdenedState.resources.sacred_water.capacity * 0.75),
+                  amount: Math.floor(burdenedState.resources.sacred_water.amount * 0.75)
+                }
+              }
+            };
+            break;
+          }
+          case "rival_oracle_surge": {
+            if (burdenedState.rivalOracles) {
+              const updatedRoster = burdenedState.rivalOracles.roster.map((rival) => ({
+                ...rival,
+                pressure: Math.min(rival.pressureCap, Math.max(40, rival.pressure))
+              }));
+              burdenedState = {
+                ...burdenedState,
+                rivalOracles: {
+                  ...burdenedState.rivalOracles,
+                  roster: updatedRoster,
+                  totalPressure: updatedRoster.reduce((sum, r) => sum + r.pressure, 0)
+                }
+              };
+            }
+            break;
+          }
         }
       }
 
@@ -1766,6 +2151,760 @@ export function reduceCommand(state: GameState, command: GameCommand): { state: 
       nextState = nextStateWithEvent(nextState, `Run recorded in lineage. Lineage score: ${updatedLineage.lineageScore}. Total runs: ${updatedLineage.totalRuns}.`);
       break;
     }
+    case "HireWorkerCommand": {
+      const hireCost = command.role === "carrier" ? 8 : 6;
+      if (nextState.resources.gold.amount < hireCost) break;
+
+      const pop = selectPopulationSummary(nextState);
+      const rolePop = command.role === "carrier" ? pop.carriers : pop.custodians;
+      if (rolePop.current >= rolePop.cap) break;
+
+      const spawnAnchor = nextState.buildings.find((b) => b.defId === "storehouse");
+      const spawnTile = spawnAnchor ? spawnAnchor.position : { x: 32, y: 50 };
+      const workerId = `walker-${command.role}-${nextState.nextId}`;
+
+      // Assign 0-2 random traits using seeded RNG
+      const traitSeed = nextState.worldSeed + nextState.nextId * 37;
+      const traitCountRoll = (traitSeed >>> 0) % 100;
+      const traitCount = traitCountRoll < 30 ? 0 : traitCountRoll < 75 ? 1 : 2;
+      const assignedTraits: WalkerTraitId[] = [];
+      if (traitCount > 0) {
+        const idx1 = ((traitSeed * 7 + 13) >>> 0) % WALKER_TRAIT_IDS.length;
+        assignedTraits.push(WALKER_TRAIT_IDS[idx1]);
+        if (traitCount > 1) {
+          let idx2 = ((traitSeed * 17 + 29) >>> 0) % WALKER_TRAIT_IDS.length;
+          if (idx2 === idx1) idx2 = (idx2 + 1) % WALKER_TRAIT_IDS.length;
+          assignedTraits.push(WALKER_TRAIT_IDS[idx2]);
+        }
+      }
+
+      nextState = {
+        ...nextState,
+        resources: {
+          ...nextState.resources,
+          gold: { ...nextState.resources.gold, amount: nextState.resources.gold.amount - hireCost }
+        },
+        walkers: [
+          ...nextState.walkers,
+          {
+            id: workerId,
+            role: command.role,
+            name: command.role === "carrier" ? `Carrier ${pop.carriers.current + 1}` : `Worker ${pop.custodians.current + 1}`,
+            tile: spawnTile,
+            state: "idle" as const,
+            path: [],
+            moveCooldown: 0,
+            homeBuildingId: spawnAnchor?.id,
+            traits: assignedTraits.length > 0 ? assignedTraits : undefined,
+            experience: 0,
+            skillLevel: 1,
+            morale: 50,
+            ...(command.role === "carrier" ? { fatigue: 0, haulingSkill: 1, supplyRadius: 5 } : {})
+          }
+        ],
+        nextId: nextState.nextId + 1
+      };
+
+      events.push({
+        type: "feed",
+        text: `Hired a new ${command.role}.`
+      } as unknown as GameEvent);
+      break;
+    }
+    case "StartResearchCommand": {
+      const techDef = techDefById[command.techId];
+      if (!techDef) break;
+
+      // Ensure research state exists
+      const research = nextState.research ?? {
+        knowledgeAccumulated: 0,
+        activeTechProgress: 0,
+        completedTechIds: [] as TechId[]
+      };
+
+      // Already completed?
+      if (research.completedTechIds.includes(command.techId)) break;
+
+      // Already researching this tech?
+      if (research.activeTechId === command.techId) break;
+
+      // Check prerequisites
+      if (techDef.requires) {
+        const missingPrereq = techDef.requires.some(
+          (req) => !research.completedTechIds.includes(req)
+        );
+        if (missingPrereq) break;
+      }
+
+      nextState = {
+        ...nextState,
+        research: {
+          ...research,
+          activeTechId: command.techId,
+          activeTechProgress: 0
+        }
+      };
+      break;
+    }
+    case "SELECT_RESEARCH": {
+      const selectTechDef = techDefById[command.techId as TechId];
+      if (!selectTechDef) break;
+
+      const selectResearch = nextState.research ?? {
+        knowledgeAccumulated: 0,
+        activeTechProgress: 0,
+        completedTechIds: [] as TechId[]
+      };
+
+      // Already completed?
+      if (selectResearch.completedTechIds.includes(command.techId as TechId)) {
+        events.push({ type: "feed", text: `Research on "${selectTechDef.name}" is already complete.` } as unknown as GameEvent);
+        break;
+      }
+
+      // Already researching this tech?
+      if (selectResearch.activeTechId === command.techId) {
+        events.push({ type: "feed", text: `Already researching "${selectTechDef.name}".` } as unknown as GameEvent);
+        break;
+      }
+
+      // Check prerequisites
+      if (selectTechDef.requires) {
+        const missingPrereqs = selectTechDef.requires.filter(
+          (req) => !selectResearch.completedTechIds.includes(req)
+        );
+        if (missingPrereqs.length > 0) {
+          events.push({ type: "feed", text: `Cannot research "${selectTechDef.name}" — missing prerequisites.` } as unknown as GameEvent);
+          break;
+        }
+      }
+
+      nextState = {
+        ...nextState,
+        research: {
+          ...selectResearch,
+          activeTechId: command.techId as TechId,
+          activeTechProgress: 0
+        }
+      };
+      events.push({ type: "feed", text: `Research started: ${selectTechDef.name}.` } as unknown as GameEvent);
+      break;
+    }
+    case "CancelResearchCommand": {
+      if (!nextState.research?.activeTechId) break;
+
+      nextState = {
+        ...nextState,
+        research: {
+          ...nextState.research,
+          activeTechId: undefined,
+          activeTechProgress: 0
+        }
+      };
+      break;
+    }
+    case "EventChainChoiceCommand": {
+      const chains = nextState.eventChains;
+      if (!chains) return { state, events };
+
+      const chainIndex = chains.findIndex((c) => c.id === command.chainInstanceId);
+      if (chainIndex === -1) return { state, events };
+
+      const chain = chains[chainIndex];
+      if (!chain.pendingChoice || chain.resolved) return { state, events };
+
+      const def = eventChainDefById[chain.defId];
+      if (!def) return { state, events };
+
+      const stage = def.stages.find((s) => s.id === chain.currentStageId);
+      if (!stage) return { state, events };
+
+      const choiceLabel = command.choice === "a"
+        ? stage.choiceA?.label ?? "Option A"
+        : stage.choiceB?.label ?? "Option B";
+
+      nextState = {
+        ...nextState,
+        eventChains: chains.map((c, idx) =>
+          idx === chainIndex
+            ? { ...c, pendingChoice: false, choiceMade: command.choice }
+            : c
+        )
+      };
+
+      nextState = nextStateWithEvent(nextState, `Oracle chose: ${choiceLabel} (${def.label})`);
+      break;
+    }
+    case "AcceptPatronCommand": {
+      const patrons = nextState.patrons ?? [];
+      const contractIndex = patrons.findIndex((p) => p.id === command.contractId);
+      if (contractIndex === -1) return { state, events };
+      const contract = patrons[contractIndex]!;
+      if (contract.active) return { state, events };
+
+      nextState = {
+        ...nextState,
+        patrons: patrons.map((p, idx) =>
+          idx === contractIndex ? { ...p, active: true, startDay: nextState.clock.day } : p
+        )
+      };
+      nextState = nextStateWithEvent(nextState, `Accepted patronage from ${nextState.factions[contract.factionId].name}: ${contract.goldPerMonth} gold/month.`);
+      break;
+    }
+
+    case "RejectPatronCommand": {
+      const patrons = nextState.patrons ?? [];
+      const contractIndex = patrons.findIndex((p) => p.id === command.contractId);
+      if (contractIndex === -1) return { state, events };
+
+      const contract = patrons[contractIndex]!;
+      const faction = nextState.factions[contract.factionId];
+
+      nextState = {
+        ...nextState,
+        patrons: patrons.filter((_, idx) => idx !== contractIndex),
+        factions: {
+          ...nextState.factions,
+          [contract.factionId]: {
+            ...faction,
+            credibility: Math.max(0, faction.credibility - 1)
+          }
+        }
+      };
+      nextState = nextStateWithEvent(nextState, `Declined patronage offer from ${faction.name}.`);
+      break;
+    }
+
+    case "BorrowGoldCommand": {
+      const faction = nextState.factions[command.factionId];
+      if (!faction) return { state, events };
+      if (faction.credibility < 40) return { state, events };
+      if (command.amount <= 0) return { state, events };
+
+      // Interest rate based on faction profile
+      const baseRate = faction.profile === "mercantile" ? 0.08
+        : faction.profile === "scheming" ? 0.12
+        : faction.profile === "devout" ? 0.04
+        : 0.06;
+      const credibilityDiscount = (faction.credibility - 40) / 600; // max ~0.1 discount
+      const interestRate = Math.max(0.02, baseRate - credibilityDiscount);
+      const durationMonths = 12;
+      const totalOwed = command.amount * (1 + interestRate * durationMonths);
+      const monthlyPayment = Math.ceil(totalOwed / durationMonths);
+
+      const loan: Loan = {
+        id: `loan-${nextState.nextId}`,
+        factionId: command.factionId,
+        principalGold: command.amount,
+        interestRate,
+        remainingPayments: durationMonths,
+        monthlyPayment,
+        startDay: nextState.clock.day,
+        missedPayments: 0
+      };
+
+      const currentLoans = nextState.loans ?? [];
+      nextState = {
+        ...nextState,
+        loans: [...currentLoans, loan],
+        resources: {
+          ...nextState.resources,
+          gold: {
+            ...nextState.resources.gold,
+            amount: nextState.resources.gold.amount + command.amount
+          }
+        },
+        nextId: nextState.nextId + 1
+      };
+      nextState = nextStateWithEvent(nextState, `Borrowed ${command.amount} gold from ${faction.name} at ${Math.round(interestRate * 100)}% interest.`);
+      break;
+    }
+
+    case "RepayLoanCommand": {
+      const loans = nextState.loans ?? [];
+      const loanIndex = loans.findIndex((l) => l.id === command.loanId);
+      if (loanIndex === -1) return { state, events };
+
+      const loan = loans[loanIndex]!;
+      const remainingBalance = loan.monthlyPayment * loan.remainingPayments;
+      const goldAvailable = nextState.resources.gold.amount;
+
+      if (goldAvailable < remainingBalance) return { state, events };
+
+      const faction = nextState.factions[loan.factionId];
+      nextState = {
+        ...nextState,
+        loans: loans.filter((_, idx) => idx !== loanIndex),
+        resources: {
+          ...nextState.resources,
+          gold: {
+            ...nextState.resources.gold,
+            amount: goldAvailable - remainingBalance
+          }
+        },
+        factions: {
+          ...nextState.factions,
+          [loan.factionId]: {
+            ...faction,
+            credibility: Math.min(100, faction.credibility + 2),
+            history: [`Delphi repaid a loan early. Trust grows.`, ...faction.history].slice(0, 4)
+          }
+        }
+      };
+      nextState = nextStateWithEvent(nextState, `Repaid loan to ${faction.name} in full. (+2 credibility)`);
+      break;
+    }
+
+    case "ProposeTreatyCommand": {
+      const faction = nextState.factions[command.factionId];
+      if (!faction) return { state, events };
+
+      // Require faction relations > 30 (favour)
+      if (faction.favour <= 30) {
+        nextState = nextStateWithEvent(nextState, `${faction.name} refuses the treaty proposal — relations are too poor.`);
+        return { state: nextState, events };
+      }
+
+      // Check if treaty already exists with this faction for same kind
+      const existingTreaties = nextState.treaties ?? [];
+      if (existingTreaties.some((t) => t.active && t.factionId === command.factionId && t.kind === command.offerType)) {
+        return { state, events };
+      }
+
+      const goldPerMonth = command.goldPerMonth ?? (command.offerType === "trade_access" ? 5 : command.offerType === "mutual_defense" ? 8 : 3);
+
+      // Deduct initial gold payment (first month)
+      if (nextState.resources.gold.amount < goldPerMonth) {
+        nextState = nextStateWithEvent(nextState, `Not enough gold to initiate treaty with ${faction.name}.`);
+        return { state: nextState, events };
+      }
+
+      const treaty: Treaty = {
+        id: `treaty-${nextState.nextId}`,
+        factionId: command.factionId,
+        kind: command.offerType,
+        goldPerMonth,
+        startDay: nextState.clock.day,
+        active: true,
+        obligationsMet: true
+      };
+
+      nextState = {
+        ...nextState,
+        treaties: [...existingTreaties, treaty],
+        resources: {
+          ...nextState.resources,
+          gold: {
+            ...nextState.resources.gold,
+            amount: nextState.resources.gold.amount - goldPerMonth
+          }
+        },
+        factions: {
+          ...nextState.factions,
+          [command.factionId]: {
+            ...faction,
+            credibility: Math.min(100, faction.credibility + 2),
+            favour: Math.min(100, faction.favour + 3)
+          }
+        },
+        nextId: nextState.nextId + 1
+      };
+      nextState = nextStateWithEvent(nextState, `Treaty of ${command.offerType.replace(/_/g, " ")} signed with ${faction.name}. (${goldPerMonth} gold/month)`);
+      break;
+    }
+
+    case "RespondToDemandsCommand": {
+      const demands = nextState.demands ?? [];
+      const demandIndex = demands.findIndex((d) => d.id === command.demandId);
+      if (demandIndex === -1) return { state, events };
+
+      const demand = demands[demandIndex]!;
+      if (demand.resolved) return { state, events };
+
+      const faction = nextState.factions[demand.factionId];
+      if (!faction) return { state, events };
+
+      const updatedDemands = [...demands];
+
+      switch (command.response) {
+        case "accept": {
+          // Fulfill demand
+          let goldCost = demand.goldAmount ?? 0;
+          if (demand.demandType === "tribute" && nextState.resources.gold.amount < goldCost) {
+            nextState = nextStateWithEvent(nextState, `Not enough gold to fulfill ${faction.name}'s tribute demand.`);
+            return { state: nextState, events };
+          }
+
+          updatedDemands[demandIndex] = { ...demand, resolved: true };
+          nextState = {
+            ...nextState,
+            demands: updatedDemands,
+            resources: demand.demandType === "tribute"
+              ? {
+                  ...nextState.resources,
+                  gold: { ...nextState.resources.gold, amount: nextState.resources.gold.amount - goldCost }
+                }
+              : nextState.resources,
+            factions: {
+              ...nextState.factions,
+              [demand.factionId]: {
+                ...faction,
+                credibility: Math.min(100, faction.credibility + 2),
+                favour: Math.min(100, faction.favour + 3)
+              }
+            }
+          };
+          nextState = nextStateWithEvent(nextState, `Accepted ${faction.name}'s demand. (+2 credibility, +3 favour)`);
+          break;
+        }
+        case "negotiate": {
+          // Reduce demand by 50%
+          const reducedGold = demand.goldAmount ? Math.ceil(demand.goldAmount / 2) : 0;
+          if (demand.demandType === "tribute" && nextState.resources.gold.amount < reducedGold) {
+            nextState = nextStateWithEvent(nextState, `Not enough gold to negotiate ${faction.name}'s demand.`);
+            return { state: nextState, events };
+          }
+
+          updatedDemands[demandIndex] = { ...demand, resolved: true, goldAmount: reducedGold };
+          nextState = {
+            ...nextState,
+            demands: updatedDemands,
+            resources: demand.demandType === "tribute"
+              ? {
+                  ...nextState.resources,
+                  gold: { ...nextState.resources.gold, amount: nextState.resources.gold.amount - reducedGold }
+                }
+              : nextState.resources
+          };
+          nextState = nextStateWithEvent(nextState, `Negotiated ${faction.name}'s demand down to half. Relations remain stable.`);
+          break;
+        }
+        case "refuse": {
+          updatedDemands[demandIndex] = { ...demand, resolved: true };
+          nextState = {
+            ...nextState,
+            demands: updatedDemands,
+            factions: {
+              ...nextState.factions,
+              [demand.factionId]: {
+                ...faction,
+                credibility: Math.max(0, faction.credibility - 2),
+                favour: Math.max(0, faction.favour - 5)
+              }
+            }
+          };
+          nextState = nextStateWithEvent(nextState, `Refused ${faction.name}'s demand. (-2 credibility, -5 favour)`);
+          break;
+        }
+      }
+      break;
+    }
+
+    case "CounterStrikeRivalCommand": {
+      if (!nextState.rivalOracles) return { state, events };
+
+      const rivalIndex = nextState.rivalOracles.roster.findIndex((r) => r.id === command.rivalId);
+      if (rivalIndex === -1) return { state, events };
+
+      const rival = nextState.rivalOracles.roster[rivalIndex]!;
+
+      // Require: pressure > 80 and weakness known
+      if (rival.pressure <= 80 || !rival.weaknessKnown) {
+        nextState = nextStateWithEvent(nextState, `Cannot counter-strike ${rival.name} — conditions not met.`);
+        return { state: nextState, events };
+      }
+
+      const updatedRoster = [...nextState.rivalOracles.roster];
+      const newPressure = Math.max(0, rival.pressure - 30);
+      updatedRoster[rivalIndex] = { ...rival, pressure: newPressure };
+
+      nextState = {
+        ...nextState,
+        rivalOracles: {
+          ...nextState.rivalOracles,
+          roster: updatedRoster,
+          totalPressure: updatedRoster.length > 0
+            ? Math.round(updatedRoster.filter((r) => r.active).reduce((sum, r) => sum + r.pressure, 0) / Math.max(1, updatedRoster.filter((r) => r.active).length))
+            : 0
+        }
+      };
+      nextState = nextStateWithEvent(nextState, `Counter-strike against ${rival.name}! Rival pressure reduced by 30.`);
+      break;
+    }
+
+    case "AssignWorkerCommand": {
+      const building = nextState.buildings.find((b) => b.id === command.buildingId);
+      const walker = nextState.walkers.find((w) => w.id === command.walkerId);
+
+      // Validation: walker must exist, be a custodian
+      if (!building || !walker || walker.role !== "custodian") {
+        return { state, events };
+      }
+
+      // Validation: building must have staffing.custodians requirement
+      const assignDef = buildingDefs[building.defId];
+      if (!assignDef.staffing?.custodians || assignDef.staffing.custodians <= 0) {
+        return { state, events };
+      }
+
+      // Validation: building not already at full staffing
+      if (building.assignedWorkerIds.length >= assignDef.staffing.custodians) {
+        return { state, events };
+      }
+
+      // Validation: worker not already assigned to another building
+      const alreadyAssigned = nextState.buildings.some(
+        (b) => b.assignedWorkerIds.includes(command.walkerId)
+      );
+      if (alreadyAssigned) {
+        return { state, events };
+      }
+
+      nextState = {
+        ...nextState,
+        buildings: nextState.buildings.map((b) =>
+          b.id === building.id
+            ? { ...b, assignedWorkerIds: [...b.assignedWorkerIds, command.walkerId] }
+            : b
+        ),
+        walkers: nextState.walkers.map((w) =>
+          w.id === walker.id
+            ? { ...w, assignmentBuildingId: building.id, state: "idle" as const, path: [] }
+            : w
+        )
+      };
+      events.push({ type: "WalkerAssigned", walkerId: walker.id, buildingId: building.id });
+      nextState = nextStateWithEvent(nextState,
+        `${walker.name} assigned to ${assignDef.name}.`
+      );
+      break;
+    }
+
+    case "UnassignWorkerCommand": {
+      const building = nextState.buildings.find((b) => b.id === command.buildingId);
+      const walker = nextState.walkers.find((w) => w.id === command.walkerId);
+
+      if (!building || !walker) {
+        return { state, events };
+      }
+
+      if (!building.assignedWorkerIds.includes(command.walkerId)) {
+        return { state, events };
+      }
+
+      nextState = {
+        ...nextState,
+        buildings: nextState.buildings.map((b) =>
+          b.id === building.id
+            ? { ...b, assignedWorkerIds: b.assignedWorkerIds.filter((id) => id !== command.walkerId) }
+            : b
+        ),
+        walkers: nextState.walkers.map((w) =>
+          w.id === walker.id
+            ? {
+                ...w,
+                assignmentBuildingId: undefined,
+                productionPhase: undefined,
+                gatherTargetTile: undefined,
+                phaseProgress: undefined,
+                phaseWork: undefined,
+                gatherResourceId: undefined,
+                gatherAmount: undefined,
+                state: "idle" as const,
+                path: []
+              }
+            : w
+        )
+      };
+      events.push({ type: "WalkerAssigned", walkerId: walker.id, buildingId: building.id });
+      nextState = nextStateWithEvent(nextState,
+        `${walker.name} unassigned from ${buildingDefs[building.defId].name}.`
+      );
+      break;
+    }
+
+    case "SELL_RESOURCE": {
+      if (command.amount <= 0) return { state, events };
+
+      const factionId = command.targetFactionId as keyof GameState["factions"];
+      const faction = nextState.factions[factionId];
+      if (!faction) return { state, events };
+
+      const resource = nextState.resources[command.resourceId];
+      if (!resource || resource.amount < command.amount) return { state, events };
+
+      // Calculate price using base prices + faction demand
+      const basePrices: Record<string, number> = {
+        grain: 2, bread: 3, olive_oil: 4, incense: 6, sacred_water: 5,
+        logs: 2, stone: 3, planks: 4, cut_stone: 5, papyrus: 2,
+        scrolls: 4, sacred_animals: 8, knowledge: 10, gold: 1, olives: 2
+      };
+      const basePrice = basePrices[command.resourceId] ?? 1;
+
+      // Faction agenda demand multiplier
+      const agendaDemand: Record<string, string[]> = {
+        war: ["stone", "logs", "planks", "cut_stone"],
+        faith: ["incense", "sacred_water", "sacred_animals"]
+      };
+      const demandResources = agendaDemand[faction.currentAgenda] ?? [];
+      const demandMultiplier = demandResources.includes(command.resourceId) ? 1.5 : 1;
+
+      // Market price index
+      const marketMultiplier = nextState.market?.priceIndex[command.resourceId] ?? 1;
+
+      let goldEarned = Math.round(command.amount * basePrice * demandMultiplier * marketMultiplier);
+
+      // Hostile faction: 50% price but +2 relations
+      const isHostile = faction.favour < 20;
+      if (isHostile) {
+        goldEarned = Math.round(goldEarned * 0.5);
+      }
+
+      nextState = {
+        ...nextState,
+        resources: {
+          ...nextState.resources,
+          [command.resourceId]: {
+            ...resource,
+            amount: resource.amount - command.amount,
+            trend: -command.amount
+          },
+          gold: {
+            ...nextState.resources.gold,
+            amount: nextState.resources.gold.amount + goldEarned
+          }
+        },
+        factions: isHostile
+          ? {
+              ...nextState.factions,
+              [factionId]: {
+                ...faction,
+                favour: Math.min(100, faction.favour + 2),
+                history: [`Delphi traded goods despite tensions. Relations thaw.`, ...faction.history].slice(0, 4)
+              }
+            }
+          : nextState.factions
+      };
+
+      events.push({
+        type: "ResourceSold",
+        resourceId: command.resourceId,
+        amount: command.amount,
+        goldEarned,
+        factionId: factionId as import("@the-oracle/content").FactionId
+      });
+      const hostileNote = isHostile ? " (hostile discount, +2 favour)" : "";
+      nextState = nextStateWithEvent(nextState,
+        `Sold ${command.amount} ${command.resourceId.replace(/_/g, " ")} to ${faction.name} for ${goldEarned} gold.${hostileNote}`
+      );
+      break;
+    }
+
+    case "DEMOLISH_BUILDING": {
+      const buildingIndex = nextState.buildings.findIndex((b) => b.id === command.buildingId);
+      if (buildingIndex === -1) return { state, events };
+
+      const building = nextState.buildings[buildingIndex]!;
+
+      // Cannot demolish Sacred Way
+      if (building.defId === "sacred_way") {
+        nextState = nextStateWithEvent(nextState, `The Sacred Way cannot be demolished.`);
+        return { state: nextState, events };
+      }
+
+      const def = buildingDefs[building.defId];
+
+      // Calculate 40% resource return
+      const goldReturned = Math.floor((def.costGold ?? 0) * 0.4);
+      let resources = nextState.resources;
+      resources = {
+        ...resources,
+        gold: {
+          ...resources.gold,
+          amount: resources.gold.amount + goldReturned
+        }
+      };
+
+      // Return 40% of costResources
+      if (def.costResources) {
+        for (const [resId, cost] of Object.entries(def.costResources) as [string, number][]) {
+          const key = resId as keyof typeof resources;
+          if (resources[key]) {
+            const returned = Math.floor(cost * 0.4);
+            if (returned > 0) {
+              resources = {
+                ...resources,
+                [key]: {
+                  ...resources[key],
+                  amount: Math.min(resources[key].capacity, resources[key].amount + returned)
+                }
+              };
+            }
+          }
+        }
+      }
+
+      // Clean up worker assignments — unassign workers assigned to this building
+      const walkers = nextState.walkers.map((w) => {
+        if (w.assignmentBuildingId === command.buildingId || w.homeBuildingId === command.buildingId) {
+          return {
+            ...w,
+            assignmentBuildingId: w.assignmentBuildingId === command.buildingId ? undefined : w.assignmentBuildingId,
+            homeBuildingId: w.homeBuildingId === command.buildingId ? undefined : w.homeBuildingId,
+            productionPhase: undefined,
+            gatherTargetTile: undefined,
+            phaseProgress: undefined,
+            phaseWork: undefined,
+            gatherResourceId: undefined,
+            gatherAmount: undefined,
+            state: "idle" as const,
+            path: [] as { x: number; y: number }[]
+          };
+        }
+        return w;
+      });
+
+      // Clean up priest assignments
+      const priests = nextState.priests.map((p) => {
+        if (p.currentAssignmentBuildingId === command.buildingId || p.homeBuildingId === command.buildingId) {
+          return {
+            ...p,
+            currentAssignmentBuildingId: p.currentAssignmentBuildingId === command.buildingId ? undefined : p.currentAssignmentBuildingId,
+            homeBuildingId: p.homeBuildingId === command.buildingId ? undefined : p.homeBuildingId
+          };
+        }
+        return p;
+      });
+
+      // Clean up carrier jobs targeting this building
+      const resourceJobs = nextState.resourceJobs.filter(
+        (job) => job.sourceBuildingId !== command.buildingId && job.targetBuildingId !== command.buildingId
+      );
+
+      // Remove building
+      const buildings = nextState.buildings.filter((_, idx) => idx !== buildingIndex);
+
+      nextState = {
+        ...nextState,
+        buildings,
+        walkers,
+        priests,
+        resourceJobs,
+        resources
+      };
+
+      events.push({
+        type: "BuildingDemolished",
+        buildingId: command.buildingId,
+        defId: building.defId,
+        goldReturned
+      });
+      nextState = nextStateWithEvent(nextState,
+        `Demolished ${def.name}. Recovered ${goldReturned} gold${def.costResources ? " and materials" : ""}.`
+      );
+      break;
+    }
+
     default:
       break;
   }

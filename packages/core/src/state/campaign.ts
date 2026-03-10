@@ -9,6 +9,7 @@ import type {
   FactionId,
   FactionState,
   GameState,
+  ProgressionMilestones,
   ReputationState,
   ReputationTierId,
   ScenarioId,
@@ -337,9 +338,11 @@ function calculateTreasuryContribution(state: GameState, factions: Record<Factio
   const openRoutes = Object.values(factions).filter((faction) => faction.tradeAccess).length;
   const treatyCount = Object.values(factions).reduce((total, faction) => total + faction.treaties.length, 0);
   const penalty = Object.values(factions).reduce((total, faction) => total + faction.embargoes.length + faction.activeConflicts.length, 0);
+  const cityTradeIncome = state.cityProsperity?.tradeRevenue ?? 0;
+  const cityDonationIncome = state.cityProsperity?.donationRevenue ?? 0;
 
   return clamp(
-    Math.round(surplusGold / 5 + prestige * 0.55 + consultation * 0.45 + openRoutes * 3 + treatyCount * 0.4 - penalty * 1.2),
+    Math.round(surplusGold / 5 + prestige * 0.55 + consultation * 0.45 + openRoutes * 3 + treatyCount * 0.4 - penalty * 1.2 + cityTradeIncome * 0.3 + cityDonationIncome * 0.2),
     0,
     90
   );
@@ -788,6 +791,121 @@ function updateWinCondition(campaign: CampaignState, absoluteDay: number): Campa
   };
 }
 
+// ── Milestone Tracking ──
+
+const BUILDING_MILESTONE_THRESHOLDS = [10, 20, 30];
+
+function ensureMilestones(milestones?: Partial<ProgressionMilestones>): ProgressionMilestones {
+  return {
+    buildingMilestones: milestones?.buildingMilestones ?? [],
+    factionTrustMilestones: milestones?.factionTrustMilestones ?? [],
+    ageMilestones: milestones?.ageMilestones ?? []
+  };
+}
+
+function checkBuildingMilestones(
+  state: GameState,
+  milestones: ProgressionMilestones,
+  currentDay: number
+): { milestones: ProgressionMilestones; feedItems: EventFeedItem[]; prestigeBonus: number } {
+  const buildingCount = state.buildings.length;
+  const feedItems: EventFeedItem[] = [];
+  let prestigeBonus = 0;
+  const newBuildingMilestones = [...milestones.buildingMilestones];
+
+  for (const threshold of BUILDING_MILESTONE_THRESHOLDS) {
+    if (buildingCount >= threshold && !newBuildingMilestones.includes(threshold)) {
+      newBuildingMilestones.push(threshold);
+      prestigeBonus += 3;
+      feedItems.push({
+        id: `event-building-milestone-${threshold}-${currentDay}`,
+        day: currentDay,
+        text: `Precinct milestone: ${threshold} buildings constructed! Prestige grows and pilgrims take notice.`
+      });
+    }
+  }
+
+  return {
+    milestones: { ...milestones, buildingMilestones: newBuildingMilestones },
+    feedItems,
+    prestigeBonus
+  };
+}
+
+function checkFactionTrustMilestones(
+  factions: Record<FactionId, FactionState>,
+  milestones: ProgressionMilestones,
+  currentDay: number
+): { milestones: ProgressionMilestones; feedItems: EventFeedItem[]; goldReward: number } {
+  const feedItems: EventFeedItem[] = [];
+  let goldReward = 0;
+  const newFactionMilestones = [...milestones.factionTrustMilestones];
+
+  for (const faction of Object.values(factions)) {
+    if (faction.credibility >= 80 && !newFactionMilestones.includes(faction.id)) {
+      newFactionMilestones.push(faction.id);
+      goldReward += 10;
+      feedItems.push({
+        id: `event-faction-trust-${faction.id}-${currentDay}`,
+        day: currentDay,
+        text: `${faction.name} now holds deep trust in the oracle. A special consultation is requested, along with a gift of 10 gold.`
+      });
+    }
+  }
+
+  return {
+    milestones: { ...milestones, factionTrustMilestones: newFactionMilestones },
+    feedItems,
+    goldReward
+  };
+}
+
+function checkAgeMilestones(
+  state: GameState,
+  milestones: ProgressionMilestones,
+  currentDay: number
+): { milestones: ProgressionMilestones; feedItems: EventFeedItem[]; reputationBonus: number } {
+  const currentAgeId = state.age?.currentAgeId;
+  if (!currentAgeId) {
+    return { milestones, feedItems: [], reputationBonus: 0 };
+  }
+
+  const feedItems: EventFeedItem[] = [];
+  let reputationBonus = 0;
+  const newAgeMilestones = [...milestones.ageMilestones];
+
+  if (!newAgeMilestones.includes(currentAgeId)) {
+    newAgeMilestones.push(currentAgeId);
+
+    // Archaic→Classical: +5 reputation
+    if (currentAgeId === "classical") {
+      reputationBonus = 5;
+      feedItems.push({
+        id: `event-age-milestone-classical-${currentDay}`,
+        day: currentDay,
+        text: "The Classical Age dawns. The oracle's endurance is rewarded: reputation grows and new building works are unlocked."
+      });
+    }
+    // Classical→Hellenistic (or hellenic): +10 reputation
+    else if (currentAgeId === "hellenic" || currentAgeId === "hellenistic") {
+      reputationBonus = 10;
+      feedItems.push({
+        id: `event-age-milestone-${currentAgeId}-${currentDay}`,
+        day: currentDay,
+        text: `The ${currentAgeId === "hellenic" ? "Hellenic" : "Hellenistic"} Age arrives. The oracle's renown earns a surge in reputation and new technologies become available.`
+      });
+    }
+  }
+
+  return {
+    milestones: { ...milestones, ageMilestones: newAgeMilestones },
+    feedItems,
+    reputationBonus
+  };
+}
+
+export { ensureMilestones, checkBuildingMilestones, checkFactionTrustMilestones, checkAgeMilestones };
+
 export function advanceCampaignState(
   state: GameState,
   factions: Record<FactionId, FactionState>
@@ -865,6 +983,42 @@ export function advanceCampaignState(
       day: state.clock.day,
       text: "The Rising Oracle is fulfilled: Delphi is revered and has weathered its first regional crisis."
     });
+  }
+
+  // ── Progression Milestones ──
+  let currentMilestones = ensureMilestones(nextCampaign.milestones);
+
+  const buildingResult = checkBuildingMilestones(state, currentMilestones, state.clock.day);
+  currentMilestones = buildingResult.milestones;
+  feedItems.push(...buildingResult.feedItems);
+
+  const factionTrustResult = checkFactionTrustMilestones(factions, currentMilestones, state.clock.day);
+  currentMilestones = factionTrustResult.milestones;
+  feedItems.push(...factionTrustResult.feedItems);
+
+  const ageResult = checkAgeMilestones(state, currentMilestones, state.clock.day);
+  currentMilestones = ageResult.milestones;
+  feedItems.push(...ageResult.feedItems);
+
+  // Apply milestone rewards to reputation
+  const milestoneRepBonus = ageResult.reputationBonus;
+  if (milestoneRepBonus > 0 || buildingResult.prestigeBonus > 0 || factionTrustResult.goldReward > 0) {
+    nextCampaign = syncCampaignState(
+      {
+        ...nextCampaign,
+        reputation: {
+          ...nextCampaign.reputation,
+          score: nextCampaign.reputation.score + milestoneRepBonus
+        },
+        milestones: currentMilestones
+      },
+      absoluteDay
+    );
+  } else {
+    nextCampaign = {
+      ...nextCampaign,
+      milestones: currentMilestones
+    };
   }
 
   return {

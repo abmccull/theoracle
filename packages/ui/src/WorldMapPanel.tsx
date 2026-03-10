@@ -3,6 +3,7 @@ import type { GameState, ReputationTierId } from "@the-oracle/core";
 import { selectRivalOracleSummary } from "@the-oracle/core";
 import React, { useEffect, useState } from "react";
 
+import { Icon } from "./Icons";
 import { PrecinctArtThumb } from "./PrecinctArtThumb";
 import type {
   WorldFactionShare,
@@ -443,7 +444,7 @@ export function WorldMapPanel(props: WorldMapPanelProps) {
       <div className="world-map-hero">
         <div className="world-map-hero-copy">
           <div className="world-map-kicker-row">
-            <span className="world-map-seal">{"\u{1F30D}"}</span>
+            <span className="world-map-seal"><Icon name="globe" size={18} /></span>
             <span className="world-map-kicker">Campaign Atlas</span>
           </div>
           <div className="headline world-map-title">{preview.title ?? "World Atlas"}</div>

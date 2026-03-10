@@ -16,8 +16,10 @@ import type {
   ConsequenceCase,
   EventFeedItem,
   FactionAgenda,
+  FactionMemory,
   FactionState,
   FactionId,
+  FactionTrustState,
   GameState,
   OmenReport,
   PhilosopherThreatState,
@@ -35,6 +37,8 @@ import { createWorldHistoryEvent, evaluateHegemon } from "../state/worldHistory"
 import { getAbsoluteDay } from "./clock";
 import { narrateWorldEvent } from "../textgen/worldNarrator";
 import { advancePhilosopherThreats } from "./philosophers";
+import { applyBehaviorShifts } from "./prophecyFeedback";
+import { selectPopulationSummary } from "../selectors";
 
 function hash(seed: number): number {
   let value = seed + 0x6d2b79f5;
@@ -64,7 +68,8 @@ function normalizeScoreContext(context: ScoreContext) {
       needs: {
         purification: 35,
         rest: 25,
-        pilgrimageCooldown: 0
+        pilgrimageCooldown: 0,
+        food: 20
       },
       traits: [] as PythiaState["traits"]
     };
@@ -333,7 +338,8 @@ function buildOmenReports(state: GameState, question: QuestionDef, base: TileSem
       sourceRole: omen.priestRole,
       text: omen.templates[(state.clock.day + state.clock.month + index * 2) % omen.templates.length]!,
       semantics: omenSemantics,
-      reliability: Math.round(clamp(baseReliability, 28, 92) * 10) / 10
+      // Pythia purification need > 68: omen reliability reduced by 20%
+      reliability: Math.round(clamp(baseReliability * (pythia.needs.purification > 68 ? 0.8 : 1), 28, 92) * 10) / 10
     };
   });
 }
@@ -706,6 +712,35 @@ export function generateAdvisorMessages(state: GameState): AdvisorMessage[] {
     });
   }
 
+  // Construction in progress
+  const underConstruction = state.buildings.filter(
+    (b) => (b.constructionWork ?? 0) > 0 && (b.constructionProgress ?? 0) < b.constructionWork!
+  );
+  if (underConstruction.length > 0) {
+    const building = underConstruction[0]!;
+    const bDef = buildingDefs[building.defId];
+    const pct = Math.round(((building.constructionProgress ?? 0) / building.constructionWork!) * 100);
+    messages.push({
+      id: `advisor-construction-${building.id}-${state.clock.day}`,
+      advisorId: "treasurer",
+      severity: "info",
+      text: `The ${bDef.name} is ${pct}% complete. Ensure a custodian remains nearby.`
+    });
+  }
+
+  // Population over-cap warning
+  if (state.research) {
+    const pop = selectPopulationSummary(state);
+    if (pop.carriers.current > pop.carriers.cap || pop.custodians.current > pop.custodians.cap) {
+      messages.push({
+        id: `advisor-overcap-${state.clock.day}`,
+        advisorId: "treasurer",
+        severity: "warn",
+        text: "Workers exceed housing capacity. Build more quarters or dismiss idle hands."
+      });
+    }
+  }
+
   // Building condition warnings
   for (const building of state.buildings) {
     const ratio = building.condition / building.maxCondition;
@@ -724,12 +759,124 @@ export function generateAdvisorMessages(state: GameState): AdvisorMessage[] {
   return messages.slice(0, advisorDefs.length);
 }
 
+/**
+ * Post-processes advisor messages to add personality development:
+ * - Tracks last 3 messages per advisor in advisorHistory
+ * - Updates advisor accuracy based on whether past warnings materialized
+ * - Adds [Trusted] or [Uncertain] prefix based on accuracy
+ * - Detects conflicting advice between advisors
+ */
+export function applyAdvisorPersonality(
+  state: GameState,
+  messages: AdvisorMessage[]
+): {
+  messages: AdvisorMessage[];
+  advisorHistory: Record<string, string[]>;
+  advisorAccuracy: Record<string, { correct: number; total: number }>;
+} {
+  const history = { ...(state.advisorHistory ?? {}) };
+  const accuracy = { ...(state.advisorAccuracy ?? {}) };
+
+  // Update accuracy based on whether previous warnings materialized:
+  // - "incense" warnings: check if incense actually ran out (< 2)
+  // - "rest" warnings: check if pythia rest got critical (> 85)
+  // - "brazier" warnings: check if brazier oil hit 0
+  // - "trade" warnings: check if trade offers stayed empty for multiple cycles
+  for (const [advisorId, pastMessages] of Object.entries(history)) {
+    if (!accuracy[advisorId]) {
+      accuracy[advisorId] = { correct: 0, total: 0 };
+    }
+    for (const pastMsg of pastMessages) {
+      // Simple heuristic: check if the warned condition is still present
+      const stillWarned = messages.some(
+        (m) => m.advisorId === advisorId && m.severity !== "info"
+      );
+      if (pastMsg.includes("incense") || pastMsg.includes("grain") || pastMsg.includes("oil") || pastMsg.includes("water")) {
+        // Resource warning — check if condition persisted (warning was correct)
+        if (stillWarned) {
+          accuracy[advisorId]!.correct += 1;
+        }
+        accuracy[advisorId]!.total += 1;
+      }
+    }
+  }
+
+  // Store current messages in history (last 3 per advisor)
+  for (const msg of messages) {
+    if (!history[msg.advisorId]) {
+      history[msg.advisorId] = [];
+    }
+    history[msg.advisorId]!.push(msg.text);
+    if (history[msg.advisorId]!.length > 3) {
+      history[msg.advisorId] = history[msg.advisorId]!.slice(-3);
+    }
+  }
+
+  // Apply confidence prefix based on accuracy
+  const prefixedMessages = messages.map((msg) => {
+    const acc = accuracy[msg.advisorId];
+    if (acc && acc.total >= 3) {
+      const rate = acc.correct / acc.total;
+      if (rate > 0.7) {
+        return { ...msg, text: `[Trusted] ${msg.text}` };
+      }
+      if (rate < 0.3) {
+        return { ...msg, text: `[Uncertain] ${msg.text}` };
+      }
+    }
+    return msg;
+  });
+
+  // Detect conflicting advice: if two advisors generate messages with opposing severity
+  // about related topics on the same turn
+  const disagreements: AdvisorMessage[] = [];
+  for (let i = 0; i < prefixedMessages.length; i++) {
+    for (let j = i + 1; j < prefixedMessages.length; j++) {
+      const a = prefixedMessages[i]!;
+      const b = prefixedMessages[j]!;
+      if (a.advisorId === b.advisorId) continue;
+      // Check for opposing severity on same-domain topics
+      if (
+        (a.severity === "critical" && b.severity === "info") ||
+        (a.severity === "info" && b.severity === "critical")
+      ) {
+        const disagreer = a.severity === "info" ? a : b;
+        const other = a.severity === "info" ? b : a;
+        disagreements.push({
+          ...disagreer,
+          id: `${disagreer.id}-disagree`,
+          text: `${disagreer.text} (disagrees with ${other.advisorId})`
+        });
+      }
+    }
+  }
+
+  // Replace messages that have disagreement versions
+  const finalMessages = prefixedMessages.map((msg) => {
+    const disagreement = disagreements.find(
+      (d) => d.id === `${msg.id}-disagree`
+    );
+    return disagreement ?? msg;
+  });
+
+  return {
+    messages: finalMessages,
+    advisorHistory: history,
+    advisorAccuracy: accuracy
+  };
+}
+
 export function maybeCreateConsultation(state: GameState): ConsultationCurrent | undefined {
   if (state.consultation.mode !== "idle") {
     return undefined;
   }
 
-  if (state.clock.day < 5 || state.clock.day % 15 !== 0) {
+  // F1.3 — Hegemon consultation frequency boost: hegemon requests 50% more often (every 10 days vs 15)
+  const bloc = dominantBlocSummary(state.factions);
+  const hegemonActive = !!bloc.leaderId;
+  const consultationInterval = hegemonActive ? 10 : 15;
+
+  if (state.clock.day < 5 || state.clock.day % consultationInterval !== 0) {
     return undefined;
   }
 
@@ -737,7 +884,21 @@ export function maybeCreateConsultation(state: GameState): ConsultationCurrent |
   const factionPool = [...factionList]
     .sort((left, right) => consultationStakeScore(right) - consultationStakeScore(left) || left.id.localeCompare(right.id))
     .slice(0, Math.min(4, factionList.length));
-  const faction = pick(factionPool, state.worldSeed + state.clock.day * 3);
+  let faction = pick(factionPool, state.worldSeed + state.clock.day * 3);
+
+  // F1.4 — Distrust skip: if selected faction is in distrust, 50% chance to skip
+  if (faction.memory?.trustState === "distrust") {
+    const skipRoll = hash(state.worldSeed + state.clock.day * 11);
+    if (skipRoll < 0.5) {
+      // Try to pick another faction
+      const alternative = factionPool.find((f) => f.id !== faction.id && f.memory?.trustState !== "distrust");
+      if (alternative) {
+        faction = alternative;
+      } else {
+        return undefined;
+      }
+    }
+  }
   const preferredDomain = preferredAgendaDomain(faction.currentAgenda);
   const questionPool = consultationQuestions.filter((question) => {
     if (question.domain !== preferredDomain) {
@@ -1392,6 +1553,11 @@ function resolveMonthlyFaction(state: GameState, faction: FactionState, index: n
       break;
   }
 
+  // F1.4 — Distrust increases debt demands by 50%
+  if (faction.memory?.trustState === "distrust" && debtDelta > 0) {
+    debtDelta = Math.round(debtDelta * 1.5);
+  }
+
   const provisionalFaction: FactionState = {
     ...faction,
     credibility: clampStat(faction.credibility + credibilityDelta),
@@ -1656,11 +1822,375 @@ function normalizeFactionConflicts(factions: Record<FactionId, FactionState>): R
   return normalized;
 }
 
+// ---------------------------------------------------------------------------
+// F1.2 — Faction Economy Integration
+// ---------------------------------------------------------------------------
+
+function defaultMemory(): FactionMemory {
+  return { consecutiveSuccesses: 0, consecutiveFailures: 0, trustState: "neutral" };
+}
+
+function applyWarTradeDisruption(
+  state: GameState,
+  factions: Record<FactionId, FactionState>
+): { links: GameState["campaign"]["worldMap"]["links"]; feedItems: EventFeedItem[] } {
+  const feedItems: EventFeedItem[] = [];
+  let links = state.campaign.worldMap.links;
+  const warringPairs: Array<[FactionId, FactionId]> = [];
+
+  for (const faction of Object.values(factions)) {
+    for (const rivalId of faction.activeConflicts) {
+      const pair: [FactionId, FactionId] = faction.id < rivalId
+        ? [faction.id, rivalId]
+        : [rivalId, faction.id];
+      if (!warringPairs.some(([a, b]) => a === pair[0] && b === pair[1])) {
+        warringPairs.push(pair);
+      }
+    }
+  }
+
+  if (warringPairs.length === 0) return { links, feedItems };
+
+  const warFactionIds = new Set<FactionId>();
+  for (const [a, b] of warringPairs) {
+    warFactionIds.add(a);
+    warFactionIds.add(b);
+  }
+
+  const factionNodeIds = new Map<FactionId, Set<string>>();
+  for (const node of state.campaign.worldMap.nodes) {
+    if (node.controllingFactionId && warFactionIds.has(node.controllingFactionId)) {
+      let set = factionNodeIds.get(node.controllingFactionId);
+      if (!set) {
+        set = new Set();
+        factionNodeIds.set(node.controllingFactionId, set);
+      }
+      set.add(node.id);
+    }
+  }
+
+  links = links.map((link) => {
+    for (const [fA, fB] of warringPairs) {
+      const nodesA = factionNodeIds.get(fA);
+      const nodesB = factionNodeIds.get(fB);
+      if (!nodesA || !nodesB) continue;
+      const fromAtoB = nodesA.has(link.fromNodeId) && nodesB.has(link.toNodeId);
+      const fromBtoA = nodesB.has(link.fromNodeId) && nodesA.has(link.toNodeId);
+      if (fromAtoB || fromBtoA) {
+        return { ...link, tradeFlow: 0 };
+      }
+    }
+    return link;
+  });
+
+  if (warringPairs.length > 0) {
+    feedItems.push({
+      id: `event-war-trade-disruption-${state.clock.year}-${state.clock.month}`,
+      day: state.clock.day,
+      text: `War disrupts trade routes between warring factions.`
+    });
+  }
+
+  return { links, feedItems };
+}
+
+function applyAllianceTradeBonus(
+  state: GameState,
+  factions: Record<FactionId, FactionState>
+): { resources: GameState["resources"]; feedItems: EventFeedItem[] } {
+  let resources = state.resources;
+  const feedItems: EventFeedItem[] = [];
+
+  // Count unique allies across all factions (bilateral treaties = alliances)
+  const allyCount = new Set(
+    Object.values(factions).flatMap((f) => f.treaties)
+  ).size;
+
+  if (allyCount === 0) return { resources, feedItems };
+
+  const goldBonus = allyCount * 2;
+  const gold = resources.gold;
+  resources = {
+    ...resources,
+    gold: {
+      ...gold,
+      amount: Math.min(gold.capacity, gold.amount + goldBonus)
+    }
+  };
+
+  feedItems.push({
+    id: `event-alliance-trade-bonus-${state.clock.year}-${state.clock.month}`,
+    day: state.clock.day,
+    text: `Allied trade routes yield +${goldBonus} gold from ${allyCount} allied factions.`
+  });
+
+  return { resources, feedItems };
+}
+
+function applyEmbargoResourcePenalty(
+  state: GameState,
+  factions: Record<FactionId, FactionState>
+): { resources: GameState["resources"]; feedItems: EventFeedItem[] } {
+  let resources = state.resources;
+  const feedItems: EventFeedItem[] = [];
+
+  // Collect all factions that have imposed embargoes (unique list)
+  const embargoingFactions = new Set<FactionId>();
+  for (const faction of Object.values(factions)) {
+    for (const embargoedId of faction.embargoes) {
+      embargoingFactions.add(embargoedId);
+    }
+  }
+
+  if (embargoingFactions.size === 0) return { resources, feedItems };
+
+  // Determine penalized resources based on embargoing faction profiles
+  const penaltyMap: Partial<Record<Exclude<ResourceId, "gold">, number>> = {};
+  for (const fId of embargoingFactions) {
+    const f = factions[fId];
+    if (!f) continue;
+    if (f.profile === "martial") {
+      penaltyMap.stone = (penaltyMap.stone ?? 0) + 2;
+      penaltyMap.logs = (penaltyMap.logs ?? 0) + 2;
+    } else if (f.profile === "mercantile") {
+      // Mercantile embargo hits gold (handled as resource_delta on gold) and grain
+      penaltyMap.grain = (penaltyMap.grain ?? 0) + 2;
+    } else if (f.profile === "devout") {
+      penaltyMap.incense = (penaltyMap.incense ?? 0) + 2;
+      penaltyMap.sacred_water = (penaltyMap.sacred_water ?? 0) + 2;
+    }
+  }
+
+  const penaltySummary: string[] = [];
+  for (const [resId, amount] of Object.entries(penaltyMap)) {
+    const res = resources[resId as ResourceId];
+    if (!res) continue;
+    resources = {
+      ...resources,
+      [resId]: {
+        ...res,
+        amount: Math.max(0, res.amount - amount)
+      }
+    };
+    penaltySummary.push(`${resId} -${amount}`);
+  }
+
+  if (penaltySummary.length > 0) {
+    feedItems.push({
+      id: `event-embargo-penalty-${state.clock.year}-${state.clock.month}`,
+      day: state.clock.day,
+      text: `Embargoes reduce supplies: ${penaltySummary.join(", ")}.`
+    });
+  }
+
+  return { resources, feedItems };
+}
+
+// ---------------------------------------------------------------------------
+// F1.3 — Hegemon Mechanical Impact
+// ---------------------------------------------------------------------------
+
+function applyHegemonMechanicalEffects(
+  state: GameState,
+  factions: Record<FactionId, FactionState>
+): {
+  resources: GameState["resources"];
+  links: GameState["campaign"]["worldMap"]["links"];
+  feedItems: EventFeedItem[];
+  reputationDelta: number;
+} {
+  const bloc = dominantBlocSummary(factions);
+  let resources = state.resources;
+  let links = state.campaign.worldMap.links;
+  const feedItems: EventFeedItem[] = [];
+  let reputationDelta = 0;
+
+  if (!bloc.leaderId) {
+    return { resources, links, feedItems, reputationDelta };
+  }
+
+  const hegemon = factions[bloc.leaderId];
+  const goldBefore = resources.gold.amount;
+
+  // Hegemon tribute: 5 gold/month from player
+  const gold = resources.gold;
+  resources = {
+    ...resources,
+    gold: {
+      ...gold,
+      amount: Math.max(0, gold.amount - 5)
+    }
+  };
+
+  feedItems.push({
+    id: `event-hegemon-tribute-${state.clock.year}-${state.clock.month}`,
+    day: state.clock.day,
+    text: `${hegemon.name} demands tribute: -5 gold.`
+  });
+
+  // Hegemon controls highest-value trade route
+  if (links.length > 0) {
+    const highestIdx = links.reduce(
+      (bestIdx, link, idx) => (link.tradeFlow > links[bestIdx]!.tradeFlow ? idx : bestIdx),
+      0
+    );
+    links = links.map((link, idx) =>
+      idx === highestIdx
+        ? { ...link, tradeFlow: link.tradeFlow + 3 }
+        : link
+    );
+  }
+
+  // Failing to satisfy hegemon demands → credibility penalty (-2/month) + embargo risk
+  if (goldBefore < 5) {
+    reputationDelta = -2;
+    feedItems.push({
+      id: `event-hegemon-penalty-${state.clock.year}-${state.clock.month}`,
+      day: state.clock.day,
+      text: `Delphi cannot satisfy ${hegemon.name}'s tribute demands. Credibility suffers.`
+    });
+  }
+
+  return { resources, links, feedItems, reputationDelta };
+}
+
+// ---------------------------------------------------------------------------
+// F1.4 — Faction Memory (update on consequence resolution)
+// ---------------------------------------------------------------------------
+
+export function updateFactionMemory(
+  faction: FactionState,
+  success: boolean
+): FactionState {
+  const mem = faction.memory ?? defaultMemory();
+  let consecutiveSuccesses = success ? mem.consecutiveSuccesses + 1 : 0;
+  let consecutiveFailures = success ? 0 : mem.consecutiveFailures + 1;
+  let trustState: FactionTrustState = "neutral";
+
+  if (consecutiveSuccesses >= 3) {
+    trustState = "devotion";
+  } else if (consecutiveFailures >= 3) {
+    trustState = "distrust";
+  } else {
+    trustState = mem.trustState === "devotion" && !success ? "neutral"
+      : mem.trustState === "distrust" && success ? "neutral"
+        : mem.trustState;
+  }
+
+  return {
+    ...faction,
+    memory: {
+      consecutiveSuccesses,
+      consecutiveFailures,
+      trustState
+    }
+  };
+}
+
+function applyFactionMemoryEffects(
+  state: GameState,
+  factions: Record<FactionId, FactionState>
+): { resources: GameState["resources"]; feedItems: EventFeedItem[] } {
+  let resources = state.resources;
+  const feedItems: EventFeedItem[] = [];
+
+  for (const faction of Object.values(factions)) {
+    if (!faction.memory) continue;
+
+    if (faction.memory.trustState === "devotion") {
+      // Devotion bonus: +3 gold/month from donations
+      const gold = resources.gold;
+      resources = {
+        ...resources,
+        gold: {
+          ...gold,
+          amount: Math.min(gold.capacity, gold.amount + 3)
+        }
+      };
+      feedItems.push({
+        id: `event-devotion-bonus-${state.clock.year}-${state.clock.month}-${faction.id}`,
+        day: state.clock.day,
+        text: `${faction.name}'s devotion to the oracle brings +3 gold in offerings.`
+      });
+    }
+  }
+
+  return { resources, feedItems };
+}
+
+// ---------------------------------------------------------------------------
+// F1.5 — War Cascade Effects
+// ---------------------------------------------------------------------------
+
+function applyWarCascadeEffects(
+  state: GameState,
+  factions: Record<FactionId, FactionState>
+): { feedItems: EventFeedItem[] } {
+  const feedItems: EventFeedItem[] = [];
+  const hasActiveConflicts = Object.values(factions).some((f) => f.activeConflicts.length > 0);
+
+  if (hasActiveConflicts) {
+    feedItems.push({
+      id: `event-war-refugees-${state.clock.year}-${state.clock.month}`,
+      day: state.clock.day,
+      text: `War refugees flood toward Delphi: pilgrim surge from war-torn regions.`
+    });
+  }
+
+  return { feedItems };
+}
+
+function applyPeaceDividend(
+  previousFactions: Record<FactionId, FactionState>,
+  currentFactions: Record<FactionId, FactionState>,
+  state: GameState
+): { feedItems: EventFeedItem[]; links: GameState["campaign"]["worldMap"]["links"] } {
+  const feedItems: EventFeedItem[] = [];
+  let links = state.campaign.worldMap.links;
+
+  // Check if any faction just ended a war (had active conflicts before, not now)
+  for (const faction of Object.values(currentFactions)) {
+    const prev = previousFactions[faction.id];
+    if (!prev) continue;
+    const hadConflicts = prev.activeConflicts.length > 0;
+    const hasConflicts = faction.activeConflicts.length > 0;
+
+    if (hadConflicts && !hasConflicts) {
+      feedItems.push({
+        id: `event-peace-dividend-${state.clock.year}-${state.clock.month}-${faction.id}`,
+        day: state.clock.day,
+        text: `Peace returns to ${faction.name}: trade routes reopen and reputation grows.`
+      });
+
+      // Reopen trade routes by restoring a baseline flow
+      const factionNodes = new Set(
+        state.campaign.worldMap.nodes
+          .filter((n) => n.controllingFactionId === faction.id)
+          .map((n) => n.id)
+      );
+      links = links.map((link) => {
+        if (
+          (factionNodes.has(link.fromNodeId) || factionNodes.has(link.toNodeId))
+          && link.tradeFlow === 0
+        ) {
+          return { ...link, tradeFlow: 5 };
+        }
+        return link;
+      });
+    }
+  }
+
+  return { feedItems, links };
+}
+
 export function advancePoliticalClimate(state: GameState): {
   factions: Record<FactionId, FactionState>;
   philosophers: GameState["philosophers"];
   tradeOffers: TradeOffer[];
   feedItems: EventFeedItem[];
+  resources?: GameState["resources"];
+  links?: GameState["campaign"]["worldMap"]["links"];
+  reputationDelta?: number;
 } {
   const orderedFactions = Object.values(state.factions).sort((left, right) => left.id.localeCompare(right.id));
   const updates = orderedFactions.map((faction, index) => resolveMonthlyFaction(state, faction, index));
@@ -1672,6 +2202,7 @@ export function advancePoliticalClimate(state: GameState): {
   factions = philosopherUpdate.factions;
   const philosophyUpdate = applyPhilosophicalDrift(factions, state);
   factions = normalizeFactionConflicts(philosophyUpdate.factions);
+  factions = applyBehaviorShifts(factions, state);
   factions = evolveFactionRelations(factions);
   factions = deriveDiplomaticAccords(factions);
   const hegemonUpdate = applyHegemonPressure(factions, state);
@@ -1699,6 +2230,46 @@ export function advancePoliticalClimate(state: GameState): {
       ]))
     };
   }
+  // F1.2 — War trade disruption
+  const warDisruption = applyWarTradeDisruption(state, factions);
+  let econLinks = warDisruption.links;
+
+  // F1.2 — Alliance trade bonus
+  const allianceBonus = applyAllianceTradeBonus(state, factions);
+  let econResources = allianceBonus.resources;
+
+  // F1.2 — Embargo resource penalty
+  const embargoEffect = applyEmbargoResourcePenalty(
+    { ...state, resources: econResources },
+    factions
+  );
+  econResources = embargoEffect.resources;
+
+  // F1.3 — Hegemon mechanical effects
+  const hegemonMechanical = applyHegemonMechanicalEffects(
+    { ...state, resources: econResources, campaign: { ...state.campaign, worldMap: { ...state.campaign.worldMap, links: econLinks } } },
+    factions
+  );
+  econResources = hegemonMechanical.resources;
+  econLinks = hegemonMechanical.links;
+
+  // F1.4 — Faction memory effects (devotion donations)
+  const memoryEffects = applyFactionMemoryEffects(
+    { ...state, resources: econResources },
+    factions
+  );
+  econResources = memoryEffects.resources;
+
+  // F1.5 — War cascade effects
+  const warCascade = applyWarCascadeEffects(state, factions);
+
+  // F1.5 — Peace dividend
+  const peaceDividend = applyPeaceDividend(state.factions, factions, {
+    ...state,
+    campaign: { ...state.campaign, worldMap: { ...state.campaign.worldMap, links: econLinks } }
+  });
+  econLinks = peaceDividend.links;
+
   const tradeOffers = buildMonthlyTradeOffers({
     ...state,
     factions
@@ -1706,6 +2277,17 @@ export function advancePoliticalClimate(state: GameState): {
   const keyStories = [...updates]
     .sort((left, right) => right.salience - left.salience)
     .slice(0, 2);
+  // Limit new economy/faction-depth feed items to avoid crowding out campaign items
+  const economyFeedItems: EventFeedItem[] = [
+    ...hegemonMechanical.feedItems,
+    ...warCascade.feedItems,
+    ...warDisruption.feedItems,
+    ...peaceDividend.feedItems,
+    ...allianceBonus.feedItems,
+    ...embargoEffect.feedItems,
+    ...memoryEffects.feedItems
+  ].slice(0, 3);
+
   const feedItems: EventFeedItem[] = [
     ...hegemonUpdate.feedItems,
     ...destabilizationUpdate.feedItems,
@@ -1720,14 +2302,19 @@ export function advancePoliticalClimate(state: GameState): {
       id: `event-trade-${state.clock.year}-${state.clock.month}`,
       day: state.clock.day,
       text: `Month ${state.clock.month}: ${tradeOffers.length} caravans offer terms to Delphi.`
-    }
+    },
+    // Economy/faction-depth items placed last (lowest display priority)
+    ...economyFeedItems
   ];
 
   return {
     factions,
     philosophers: philosopherUpdate.philosophers,
     tradeOffers,
-    feedItems
+    feedItems,
+    resources: econResources,
+    links: econLinks,
+    reputationDelta: hegemonMechanical.reputationDelta
   };
 }
 
@@ -1759,12 +2346,13 @@ export function buildMonthlyTradeOffers(state: GameState): TradeOffer[] {
         - (bloc.leaderId === faction.id ? 0.8 : bloc.memberIds.includes(faction.id) ? 0.45 : 0)
         + (bloc.rivalIds.includes(faction.id) ? 1 : 0);
 
+      const marketMultiplier = state.market?.priceIndex[resourceId] ?? 1.0;
       return {
         id: `trade-${state.clock.month}-${index}`,
         factionId: faction.id,
         resourceId,
         amount: Math.max(4, 7 + index * 2 + amountBonus + Math.round((faction.favour + faction.credibility) / 25)),
-        price: Math.max(5, 8 + Math.max(0, 58 - faction.favour) / 6 + faction.debt / 8 + priceBias)
+        price: Math.max(5, (8 + Math.max(0, 58 - faction.favour) / 6 + faction.debt / 8 + priceBias) * marketMultiplier)
       };
     });
 }
@@ -2048,9 +2636,12 @@ export function scorePlacedTiles(tiles: WordTile[], context: ScoreContext): { cl
     )
   );
 
+  // Pythia rest need > 70: -15% tile quality multiplier
+  const restQualityMultiplier = pythia.needs.rest > 70 ? 0.85 : 1;
+
   return {
-    clarity: Math.round(clarity),
-    value: Math.round(value),
+    clarity: Math.round(clarity * restQualityMultiplier),
+    value: Math.round(value * restQualityMultiplier),
     risk: Math.round(risk)
   };
 }
@@ -2567,6 +3158,195 @@ export function advanceWorldHistory(state: GameState): GameState {
     factions: revolutionResult.factions,
     worldHistory: updatedWorldHistory
   };
+}
+
+// ── Decline Recovery Mechanics ──
+
+/**
+ * Check if a Grand Consultation should be made available.
+ * Available when reputation drops below "recognized" tier.
+ */
+export function isGrandConsultationAvailable(state: GameState): boolean {
+  const tier = state.campaign.reputation.currentTier;
+  return tier === "obscure" && !state.campaign.grandConsultationActive;
+}
+
+/**
+ * Activate the Grand Consultation flag. The next delivered prophecy becomes high-stakes.
+ */
+export function activateGrandConsultation(state: GameState): GameState {
+  return {
+    ...state,
+    campaign: {
+      ...state.campaign,
+      grandConsultationActive: true
+    }
+  };
+}
+
+/**
+ * Resolve the Grand Consultation based on the depth band of the delivered prophecy.
+ * Deep/oracular bands: +15 reputation, pilgrim surge event.
+ * Shallow/grounded bands: -10 reputation, crisis acceleration.
+ */
+export function resolveGrandConsultation(
+  state: GameState,
+  depthBand: "shallow" | "grounded" | "deep" | "oracular" | undefined
+): { state: GameState; feedItems: EventFeedItem[] } {
+  if (!state.campaign.grandConsultationActive) {
+    return { state, feedItems: [] };
+  }
+
+  const absoluteDay = (state.clock.year - 1) * 360 + (state.clock.month - 1) * 30 + state.clock.day;
+  const feedItems: EventFeedItem[] = [];
+  const isSuccess = depthBand === "deep" || depthBand === "oracular";
+
+  if (isSuccess) {
+    const newScore = Math.max(0, state.campaign.reputation.score + 15);
+    feedItems.push({
+      id: `event-grand-consultation-success-${absoluteDay}`,
+      day: state.clock.day,
+      text: "The Grand Consultation succeeds! The Pythia's deep vision restores faith in the oracle. Pilgrims surge toward Delphi."
+    });
+    return {
+      state: {
+        ...state,
+        campaign: {
+          ...state.campaign,
+          grandConsultationActive: false,
+          reputation: {
+            ...state.campaign.reputation,
+            score: newScore
+          }
+        }
+      },
+      feedItems
+    };
+  }
+
+  // Failure: shallow or grounded
+  const newScore = Math.max(0, state.campaign.reputation.score - 10);
+  feedItems.push({
+    id: `event-grand-consultation-failure-${absoluteDay}`,
+    day: state.clock.day,
+    text: "The Grand Consultation fails. The Pythia's shallow reading accelerates the oracle's decline. A crisis chain threatens."
+  });
+  return {
+    state: {
+      ...state,
+      campaign: {
+        ...state.campaign,
+        grandConsultationActive: false,
+        reputation: {
+          ...state.campaign.reputation,
+          score: newScore
+        }
+      }
+    },
+    feedItems
+  };
+}
+
+/**
+ * Check if a Sacred Pilgrimage event should trigger.
+ * Available when reputation is below "revered" tier; 10% monthly chance.
+ */
+export function shouldTriggerSacredPilgrimage(state: GameState, seed: number): boolean {
+  const tier = state.campaign.reputation.currentTier;
+  if (tier === "revered" || tier === "panhellenic") {
+    return false;
+  }
+  if (state.campaign.sacredPilgrimage) {
+    return false; // Already on pilgrimage
+  }
+  // Need available priests
+  if (state.priests.length === 0) {
+    return false;
+  }
+  return hash(seed) < 0.10;
+}
+
+/**
+ * Start a Sacred Pilgrimage: sends a priest away for 30 days.
+ */
+export function startSacredPilgrimage(state: GameState): { state: GameState; feedItems: EventFeedItem[] } {
+  const absoluteDay = (state.clock.year - 1) * 360 + (state.clock.month - 1) * 30 + state.clock.day;
+  const priest = state.priests[0];
+  if (!priest) {
+    return { state, feedItems: [] };
+  }
+
+  const feedItems: EventFeedItem[] = [{
+    id: `event-pilgrimage-start-${absoluteDay}`,
+    day: state.clock.day,
+    text: `${priest.role} priest departs on a Sacred Pilgrimage. They will return in 30 days with blessings.`
+  }];
+
+  return {
+    state: {
+      ...state,
+      campaign: {
+        ...state.campaign,
+        sacredPilgrimage: {
+          priestId: priest.id,
+          returnDay: absoluteDay + 30
+        }
+      }
+    },
+    feedItems
+  };
+}
+
+/**
+ * Complete a Sacred Pilgrimage: +8 reputation, +5 prosperity, priest returns.
+ */
+export function completeSacredPilgrimage(state: GameState): { state: GameState; feedItems: EventFeedItem[] } {
+  const pilgrimage = state.campaign.sacredPilgrimage;
+  if (!pilgrimage) {
+    return { state, feedItems: [] };
+  }
+
+  const absoluteDay = (state.clock.year - 1) * 360 + (state.clock.month - 1) * 30 + state.clock.day;
+  if (absoluteDay < pilgrimage.returnDay) {
+    return { state, feedItems: [] };
+  }
+
+  const newScore = Math.max(0, state.campaign.reputation.score + 8);
+  const feedItems: EventFeedItem[] = [{
+    id: `event-pilgrimage-return-${absoluteDay}`,
+    day: state.clock.day,
+    text: "The Sacred Pilgrimage concludes. The priest returns bearing divine favor. Reputation and prosperity increase."
+  }];
+
+  const currentProsperity = state.cityProsperity?.prosperityScore ?? 0;
+
+  return {
+    state: {
+      ...state,
+      campaign: {
+        ...state.campaign,
+        sacredPilgrimage: undefined,
+        reputation: {
+          ...state.campaign.reputation,
+          score: newScore
+        }
+      },
+      ...(state.cityProsperity ? {
+        cityProsperity: {
+          ...state.cityProsperity,
+          prosperityScore: Math.min(100, currentProsperity + 5)
+        }
+      } : {})
+    },
+    feedItems
+  };
+}
+
+/**
+ * Check if a priest is currently on Sacred Pilgrimage (unavailable).
+ */
+export function isPriestOnPilgrimage(state: GameState, priestId: string): boolean {
+  return state.campaign.sacredPilgrimage?.priestId === priestId;
 }
 
 export function buildingDisplayColor(defId: BuildingDefId): number {

@@ -1,7 +1,7 @@
-import type { LegendaryConsultationId, OriginId } from "@the-oracle/content";
+import type { DifficultyId, LegendaryConsultationId, OriginId, PythiaArchetypeId, ResourceId, ScenarioId, TechId } from "@the-oracle/content";
 
-import type { BuildingDefId, Coord, FactionId, PlacementTool } from "../state/gameState";
-import type { EspionageAgentCover, EspionageOperationKind } from "../state/espionage";
+import type { BuildingDefId, Coord, FactionId, PlacementTool, TreatyKind } from "../state/gameState";
+import type { EspionageAgentCover, EspionageOperationKind, EspionageAgentStatus } from "../state/espionage";
 import type { BurdenId } from "../state/lineage";
 
 export type PlaceRoadCommand = {
@@ -103,6 +103,10 @@ export type StartNewRunCommand = {
   type: "StartNewRunCommand";
   seed?: number | string;
   originId?: OriginId;
+  scenarioId?: ScenarioId;
+  difficultyId?: DifficultyId;
+  pythiaArchetypeId?: PythiaArchetypeId;
+  startingRegionId?: string;
 };
 
 export type IssuePriestDecreeCommand = {
@@ -154,6 +158,28 @@ export type RecruitAgentCommand = {
   targetFactionId: FactionId;
 };
 
+export type DeployAgentCommand = {
+  type: "DeployAgentCommand";
+  agentId: string;
+  operationKind: EspionageOperationKind;
+  targetId: string;
+};
+
+export type RecallAgentCommand = {
+  type: "RecallAgentCommand";
+  agentId: string;
+};
+
+export type RansomAgentCommand = {
+  type: "RansomAgentCommand";
+  agentId: string;
+};
+
+export type InterrogateAgentCommand = {
+  type: "InterrogateAgentCommand";
+  agentId: string;
+};
+
 export type TriggerEndOfRunCommand = {
   type: "TriggerEndOfRunCommand";
 };
@@ -178,6 +204,94 @@ export type StartNewLineageRunCommand = {
 
 export type RecordLineageRunCommand = {
   type: "RecordLineageRunCommand";
+};
+
+export type HireWorkerCommand = {
+  type: "HireWorkerCommand";
+  role: "carrier" | "custodian";
+};
+
+export type StartResearchCommand = {
+  type: "StartResearchCommand";
+  techId: TechId;
+};
+
+export type SelectResearchCommand = {
+  type: "SELECT_RESEARCH";
+  techId: string;
+};
+
+export type CancelResearchCommand = {
+  type: "CancelResearchCommand";
+};
+
+export type EventChainChoiceCommand = {
+  type: "EventChainChoiceCommand";
+  chainInstanceId: string;
+  choice: "a" | "b";
+};
+
+export type AcceptPatronCommand = {
+  type: "AcceptPatronCommand";
+  contractId: string;
+};
+
+export type RejectPatronCommand = {
+  type: "RejectPatronCommand";
+  contractId: string;
+};
+
+export type BorrowGoldCommand = {
+  type: "BorrowGoldCommand";
+  factionId: FactionId;
+  amount: number;
+};
+
+export type RepayLoanCommand = {
+  type: "RepayLoanCommand";
+  loanId: string;
+};
+
+export type ProposeTreatyCommand = {
+  type: "ProposeTreatyCommand";
+  factionId: FactionId;
+  offerType: TreatyKind;
+  goldPerMonth?: number;
+};
+
+export type RespondToDemandsCommand = {
+  type: "RespondToDemandsCommand";
+  demandId: string;
+  response: "accept" | "negotiate" | "refuse";
+};
+
+export type CounterStrikeRivalCommand = {
+  type: "CounterStrikeRivalCommand";
+  rivalId: string;
+};
+
+export type AssignWorkerCommand = {
+  type: "AssignWorkerCommand";
+  walkerId: string;
+  buildingId: string;
+};
+
+export type UnassignWorkerCommand = {
+  type: "UnassignWorkerCommand";
+  walkerId: string;
+  buildingId: string;
+};
+
+export type SellResourceCommand = {
+  type: "SELL_RESOURCE";
+  resourceId: ResourceId;
+  amount: number;
+  targetFactionId: string;
+};
+
+export type DemolishBuildingCommand = {
+  type: "DEMOLISH_BUILDING";
+  buildingId: string;
 };
 
 export type GameCommand =
@@ -210,8 +324,28 @@ export type GameCommand =
   | LaunchEspionageOperationCommand
   | InvestigatePriestCommand
   | RecruitAgentCommand
+  | DeployAgentCommand
+  | RecallAgentCommand
+  | RansomAgentCommand
+  | InterrogateAgentCommand
   | TriggerEndOfRunCommand
   | BeginLegendaryConsultationCommand
   | AdvanceLegendaryStageCommand
   | StartNewLineageRunCommand
-  | RecordLineageRunCommand;
+  | RecordLineageRunCommand
+  | HireWorkerCommand
+  | StartResearchCommand
+  | SelectResearchCommand
+  | CancelResearchCommand
+  | EventChainChoiceCommand
+  | AcceptPatronCommand
+  | RejectPatronCommand
+  | BorrowGoldCommand
+  | RepayLoanCommand
+  | ProposeTreatyCommand
+  | RespondToDemandsCommand
+  | CounterStrikeRivalCommand
+  | AssignWorkerCommand
+  | UnassignWorkerCommand
+  | SellResourceCommand
+  | DemolishBuildingCommand;

@@ -48,7 +48,7 @@ export function PriestsOverlayPanel({ state, selectedBuilding }: { state: GameSt
         {priestPolitics.rumor ? (
           <div className="priest-politics-rumor">Rumor: {priestPolitics.rumor}</div>
         ) : null}
-        <div className="pythia-actions" style={{ marginTop: "8px" }}>
+        <div className="pythia-actions mt-2">
           <button className="oracle-button" onClick={() => onIssuePriestDecree("calm")} type="button">Issue Calm</button>
           <button className="oracle-button" onClick={() => onIssuePriestDecree("reform")} type="button">Issue Reform</button>
           <button className="oracle-button" onClick={() => onIssuePriestDecree("investigate")} type="button">Investigate</button>
@@ -67,10 +67,9 @@ export function PriestsOverlayPanel({ state, selectedBuilding }: { state: GameSt
               <div className="priest-bloc-note">{bloc.note}</div>
               {bloc.id !== priestPolitics.dominantBlocId ? (
                 <button
-                  className="oracle-button text-xs"
+                  className="oracle-button text-xs mt-1"
                   onClick={() => onEndorseBloc(bloc.id)}
                   type="button"
-                  style={{ marginTop: "4px" }}
                 >
                   Endorse
                 </button>
@@ -118,13 +117,13 @@ export function PriestsOverlayPanel({ state, selectedBuilding }: { state: GameSt
       ) : null}
 
       {state.priests.length === 0 ? (
-        <div className="text-sm" style={{ color: "var(--text-dim)" }}>No priests ordained yet.</div>
+        <div className="text-sm text-dim">No priests ordained yet.</div>
       ) : null}
       {priestRoster.map((priest) => (
         <div key={priest.id} className="priest-row">
           <div className="priest-row-header">
             <span className="priest-row-name">{priest.name}</span>
-            <span className="text-xs" style={{ color: "var(--text-dim)" }}>{priest.role ?? "Priest"}</span>
+            <span className="text-xs text-dim">{priest.role ?? "Priest"}</span>
           </div>
           <div className="priest-row-details">
             Skill {priest.skill ?? 0} | Morale {priest.morale ?? 100}
@@ -148,22 +147,22 @@ export function PriestsOverlayPanel({ state, selectedBuilding }: { state: GameSt
           {(() => {
             const secrets = priestSecrets.find((s) => s.priestId === priest.id);
             return secrets && secrets.discoveredSecrets.length > 0 ? (
-              <div style={{ marginTop: "4px" }}>
-                <div className="text-xs" style={{ fontWeight: 600, color: "var(--text-dim)" }}>Discovered Secrets:</div>
+              <div className="mt-1">
+                <div className="text-xs font-semibold text-dim">Discovered Secrets:</div>
                 {secrets.discoveredSecrets.map((s) => (
-                  <div key={s.id} className="text-xs" style={{ color: "var(--red, #c44)" }}>
+                  <div key={s.id} className="text-xs text-red">
                     {s.kind.replace(/_/g, " ")} (severity {s.severity})
                   </div>
                 ))}
                 {secrets.hiddenCount > 0 ? (
-                  <div className="text-xs" style={{ color: "var(--text-dim)" }}>
+                  <div className="text-xs text-dim">
                     {secrets.hiddenCount} hidden secret{secrets.hiddenCount > 1 ? "s" : ""} remain
                   </div>
                 ) : null}
               </div>
             ) : null;
           })()}
-          <div style={{ display: "flex", gap: "6px", marginTop: "4px" }}>
+          <div className="flex-row-gap-2 mt-1">
             <button
               className="oracle-button text-xs"
               onClick={() => onInvestigatePriest(priest.id)}
@@ -172,20 +171,18 @@ export function PriestsOverlayPanel({ state, selectedBuilding }: { state: GameSt
               Investigate
             </button>
             <button
-              className="oracle-button text-xs"
+              className="oracle-button text-xs text-red"
               onClick={() => onDismissPriest(priest.id)}
               type="button"
-              style={{ color: "var(--red)" }}
             >
               Dismiss
             </button>
           </div>
           {needAssignment && !priest.assignmentId && selectedBuilding ? (
             <button
-              className="oracle-button text-xs"
+              className="oracle-button text-xs mt-1"
               onClick={() => onAssignPriest(priest.id, selectedBuilding.id)}
               type="button"
-              style={{ marginTop: "4px" }}
             >
               Assign to {buildingDefs[selectedBuilding.defId].name}
             </button>

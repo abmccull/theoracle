@@ -42,7 +42,7 @@ function RunHistoryList({ overview }: { overview: LineageOverview }) {
             <span>Seed: {run.seedText}</span>
             <span>Score: {run.finalScore}</span>
             {run.finalAge ? <span>{run.finalAge}</span> : null}
-            <span className="text-xs" style={{ color: "var(--text-dim)" }}>{run.epitaph}</span>
+            <span className="text-xs text-dim">{run.epitaph}</span>
           </div>
         ))}
     </div>
@@ -92,7 +92,7 @@ function UnlockedBurdensView({ burdens, selectedBurdens, onToggleBurden }: { bur
             <div className="burden-toggle-info">
               <strong>{b.name}</strong>
               <span className="text-xs">{b.description}</span>
-              <span className="text-xs" style={{ color: "var(--gold)" }}>
+              <span className="text-xs text-gold">
                 Score x{b.scoreMultiplier}
               </span>
             </div>
@@ -156,7 +156,7 @@ function ChallengeSeedBrowser({ challenges }: { challenges: ChallengeSeedView[] 
               {entry.bestScore !== undefined ? ` | Best: ${entry.bestScore}` : ""}
               {entry.completed ? " | COMPLETED" : ""}
             </span>
-            <span className="text-xs" style={{ color: "var(--text-dim)" }}>
+            <span className="text-xs text-dim">
               Burdens: {c.burdens.length > 0 ? c.burdens.join(", ") : "none"}
             </span>
           </div>
@@ -214,8 +214,7 @@ export function LineagePanel({ state }: { state: GameState }) {
       {overview.totalRuns > 0 ? (
         <div className="sidebar-block">
           <button
-            className="oracle-button gold"
-            style={{ width: "100%" }}
+            className="oracle-button gold w-full"
             onClick={() => {
               const origin = overview.unlockedOrigins[0] ?? "classical-delphi";
               dispatch.onStartNewLineageRun(

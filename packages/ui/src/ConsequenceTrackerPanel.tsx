@@ -7,13 +7,13 @@ export function ConsequenceTrackerPanel({ state }: { state: GameState }) {
   const factions = state.factions;
 
   if (tracker.pending.length === 0 && tracker.resolved.length === 0) {
-    return <div className="text-sm" style={{ color: "var(--text-dim)" }}>No prophecy consequences tracked yet.</div>;
+    return <div className="text-sm text-dim">No prophecy consequences tracked yet.</div>;
   }
 
   return (
     <>
       {tracker.urgentCount > 0 ? (
-        <div className="advisor-banner warn text-xs" style={{ marginBottom: "8px" }}>
+        <div className="advisor-banner warn text-xs mb-2">
           {tracker.urgentCount} consequence{tracker.urgentCount > 1 ? "s" : ""} due within 30 days
         </div>
       ) : null}
@@ -27,7 +27,7 @@ export function ConsequenceTrackerPanel({ state }: { state: GameState }) {
                 <span>{factions[c.factionId as keyof typeof factions]?.name ?? c.factionId}</span>
                 <span className="condition-badge warn">Due Day {c.dueDay}</span>
               </div>
-              <div className="text-xs" style={{ color: "var(--text-dim)" }}>
+              <div className="text-xs text-dim">
                 Prophecy {c.prophecyId.slice(0, 8)}
               </div>
             </div>
@@ -49,7 +49,7 @@ export function ConsequenceTrackerPanel({ state }: { state: GameState }) {
                 ) : null}
               </div>
               {c.report ? (
-                <div className="text-xs" style={{ color: "var(--text-mid)" }}>{c.report}</div>
+                <div className="text-xs text-mid">{c.report}</div>
               ) : null}
             </div>
           ))}

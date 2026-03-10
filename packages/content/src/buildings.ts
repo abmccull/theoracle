@@ -28,7 +28,12 @@ export const buildingDefs: Record<BuildingDef["id"], BuildingDef> = {
     staffing: {
       priests: { attendant: 2, spring_warden: 1, flame_keeper: 1 },
       custodians: 1
-    }
+    },
+    storageCaps: {
+      grain: 8,
+      bread: 8
+    },
+    housingCapacity: { priests: 4 }
   },
   storehouse: {
     id: "storehouse",
@@ -49,9 +54,14 @@ export const buildingDefs: Record<BuildingDef["id"], BuildingDef> = {
       scrolls: 18,
       papyrus: 18,
       sacred_water: 40,
-      sacred_animals: 4
+      sacred_animals: 4,
+      logs: 30,
+      stone: 30,
+      planks: 20,
+      cut_stone: 20
     },
-    passiveEffects: [{ id: "storehouse-buffer", kind: "storage_buffer", value: 1, notes: "Stabilizes delivery targets for core ritual goods." }]
+    passiveEffects: [{ id: "storehouse-buffer", kind: "storage_buffer", value: 1, notes: "Stabilizes delivery targets for core ritual goods." }],
+    spoilageReduction: { grain: 0.50, bread: 0.50, olives: 0.50, sacred_water: 0.50, sacred_animals: 0.50 }
   },
   castalian_spring: {
     id: "castalian_spring",
@@ -76,7 +86,10 @@ export const buildingDefs: Record<BuildingDef["id"], BuildingDef> = {
         requiresRoles: ["spring_warden"],
         notes: "Provides steady ritual purification stock."
       }
-    ]
+    ],
+    requiredNearbyTerrain: { terrainTypes: ["water"], depositType: "sacred_spring", maxDistance: 2 },
+    productionCycle: { depositType: "sacred_spring", gatherTicks: 30, gatherYield: 1.0, processTicks: 10 },
+    spoilageReduction: { sacred_water: 0.10 }
   },
   inner_sanctum: {
     id: "inner_sanctum",
@@ -109,7 +122,10 @@ export const buildingDefs: Record<BuildingDef["id"], BuildingDef> = {
     staffing: {
       priests: { flame_keeper: 1 }
     },
-    passiveEffects: [{ id: "flame-prestige", kind: "prestige", value: 1, resourceId: "olive_oil", notes: "Well-fed flame improves visible sanctity." }]
+    passiveEffects: [{ id: "flame-prestige", kind: "prestige", value: 1, resourceId: "olive_oil", notes: "Well-fed flame improves visible sanctity." }],
+    adjacencyBonuses: [
+      { nearDefId: "inner_sanctum", bonusKind: "production", value: -0.10, maxDistance: 2 }
+    ]
   },
   sacrificial_altar: {
     id: "sacrificial_altar",
@@ -155,7 +171,8 @@ export const buildingDefs: Record<BuildingDef["id"], BuildingDef> = {
     },
     storageCaps: {
       sacred_animals: 8,
-      grain: 20
+      grain: 20,
+      bread: 4
     },
     recipes: [
       {
@@ -165,7 +182,8 @@ export const buildingDefs: Record<BuildingDef["id"], BuildingDef> = {
         dailyRate: 1,
         notes: "Converts feed into a steady altar supply."
       }
-    ]
+    ],
+    spoilageReduction: { sacred_animals: 0.30 }
   },
   granary: {
     id: "granary",
@@ -183,7 +201,8 @@ export const buildingDefs: Record<BuildingDef["id"], BuildingDef> = {
       grain: 120,
       bread: 36
     },
-    passiveEffects: [{ id: "granary-buffer", kind: "storage_buffer", value: 2, resourceId: "grain", notes: "Absorbs caravan variability for food chains." }]
+    passiveEffects: [{ id: "granary-buffer", kind: "storage_buffer", value: 2, resourceId: "grain", notes: "Absorbs caravan variability for food chains." }],
+    spoilageReduction: { grain: 0.20, bread: 0.20 }
   },
   kitchen: {
     id: "kitchen",
@@ -212,6 +231,9 @@ export const buildingDefs: Record<BuildingDef["id"], BuildingDef> = {
         dailyRate: 1,
         notes: "Foundational food chain for growing staffing and hospitality."
       }
+    ],
+    adjacencyBonuses: [
+      { nearDefId: "granary", bonusKind: "production", value: 0.10, maxDistance: 3 }
     ]
   },
   olive_press: {
@@ -228,7 +250,9 @@ export const buildingDefs: Record<BuildingDef["id"], BuildingDef> = {
     startingResources: { olives: 2 },
     storageCaps: {
       olives: 24,
-      olive_oil: 24
+      olive_oil: 24,
+      grain: 4,
+      bread: 4
     },
     recipes: [
       {
@@ -238,6 +262,9 @@ export const buildingDefs: Record<BuildingDef["id"], BuildingDef> = {
         dailyRate: 1,
         notes: "Feeds braziers and high-status rites."
       }
+    ],
+    adjacencyBonuses: [
+      { nearDefId: "olive_grove", bonusKind: "production", value: 0.12, maxDistance: 3 }
     ]
   },
   incense_store: {
@@ -269,6 +296,7 @@ export const buildingDefs: Record<BuildingDef["id"], BuildingDef> = {
     maxCondition: 100,
     color: 0x5d7f7f,
     unlockTier: "revered",
+    cityTierRequirement: "town",
     upkeep: { bread: 0.01, incense: 0.005 },
     startingResources: {},
     staffing: {
@@ -297,7 +325,8 @@ export const buildingDefs: Record<BuildingDef["id"], BuildingDef> = {
     passiveEffects: [
       { id: "guest-capacity", kind: "pilgrim_capacity", value: 6, notes: "More visitors can be hosted during campaign peaks." },
       { id: "guest-donations", kind: "donation", value: 3, notes: "Comfortable guests donate more reliably." }
-    ]
+    ],
+    housingCapacity: { carriers: 1, custodians: 1 }
   },
   grain_field: {
     id: "grain_field",
@@ -314,7 +343,8 @@ export const buildingDefs: Record<BuildingDef["id"], BuildingDef> = {
       custodians: 1
     },
     storageCaps: {
-      grain: 30
+      grain: 30,
+      bread: 4
     },
     recipes: [
       {
@@ -324,7 +354,9 @@ export const buildingDefs: Record<BuildingDef["id"], BuildingDef> = {
         dailyRate: 1,
         notes: "Base grain production. Seasonal climate affects yield."
       }
-    ]
+    ],
+    requiredNearbyTerrain: { terrainTypes: ["grass"], depositType: "fertile_soil", maxDistance: 2 },
+    productionCycle: { depositType: "fertile_soil", gatherTicks: 60, gatherYield: 1.5, processTicks: 15 }
   },
   olive_grove: {
     id: "olive_grove",
@@ -341,7 +373,9 @@ export const buildingDefs: Record<BuildingDef["id"], BuildingDef> = {
       custodians: 1
     },
     storageCaps: {
-      olives: 30
+      olives: 30,
+      grain: 4,
+      bread: 4
     },
     recipes: [
       {
@@ -351,7 +385,9 @@ export const buildingDefs: Record<BuildingDef["id"], BuildingDef> = {
         dailyRate: 1,
         notes: "Olives peak in autumn. One grove nearly sustains one press."
       }
-    ]
+    ],
+    requiredNearbyTerrain: { terrainTypes: ["grass"], depositType: "fertile_soil", maxDistance: 3 },
+    productionCycle: { depositType: "fertile_soil", gatherTicks: 45, gatherYield: 1.2, processTicks: 15 }
   },
   incense_workshop: {
     id: "incense_workshop",
@@ -370,7 +406,9 @@ export const buildingDefs: Record<BuildingDef["id"], BuildingDef> = {
       custodians: 1
     },
     storageCaps: {
-      incense: 20
+      incense: 20,
+      grain: 4,
+      bread: 4
     },
     recipes: [
       {
@@ -400,7 +438,9 @@ export const buildingDefs: Record<BuildingDef["id"], BuildingDef> = {
     },
     storageCaps: {
       papyrus: 20,
-      sacred_water: 10
+      sacred_water: 10,
+      grain: 4,
+      bread: 4
     },
     recipes: [
       {
@@ -441,7 +481,10 @@ export const buildingDefs: Record<BuildingDef["id"], BuildingDef> = {
         notes: "Slow prestige production. Scrolls enhance consultations."
       }
     ],
-    passiveEffects: [{ id: "scriptorium-prestige", kind: "prestige", value: 2, notes: "The written word elevates Delphi's scholarly reputation." }]
+    passiveEffects: [{ id: "scriptorium-prestige", kind: "prestige", value: 2, notes: "The written word elevates Delphi's scholarly reputation." }],
+    adjacencyBonuses: [
+      { nearDefId: "library", bonusKind: "production", value: 0.15, maxDistance: 3 }
+    ]
   },
   library: {
     id: "library",
@@ -460,11 +503,262 @@ export const buildingDefs: Record<BuildingDef["id"], BuildingDef> = {
     },
     storageCaps: {
       scrolls: 40,
-      papyrus: 20
+      papyrus: 20,
+      knowledge: 60
     },
+    recipes: [
+      {
+        id: "generate-knowledge",
+        consumes: { scrolls: 0.02 },
+        produces: { knowledge: 0.04 },
+        dailyRate: 1,
+        requiresRoles: ["scholar"],
+        notes: "Scholars study accumulated scrolls to produce research knowledge."
+      }
+    ],
     passiveEffects: [
       { id: "library-prestige", kind: "prestige", value: 4, notes: "A well-stocked library cements Delphi's intellectual primacy." },
       { id: "library-omen", kind: "omen_quality", value: 1, notes: "Recorded precedents improve prophecy calibration." }
+    ],
+    adjacencyBonuses: [
+      { nearDefId: "scriptorium", bonusKind: "production", value: 0.15, maxDistance: 3 }
+    ]
+  },
+  hylotomos_camp: {
+    id: "hylotomos_camp",
+    name: "Logging Camp",
+    description: "Woodcutters fell timber on the mountain slopes above the precinct.",
+    category: "production",
+    costGold: 12,
+    constructionWork: 4,
+    requiresPriest: false,
+    maxCondition: 90,
+    color: 0x6b5a3e,
+    upkeep: {},
+    startingResources: { logs: 3 },
+    staffing: { custodians: 1 },
+    storageCaps: { logs: 30, grain: 4, bread: 4 },
+    recipes: [
+      {
+        id: "fell-timber",
+        consumes: {},
+        produces: { logs: 0.14 },
+        dailyRate: 1,
+        notes: "Base timber production. No input required."
+      }
+    ],
+    requiredNearbyTerrain: { terrainTypes: ["forest"], depositType: "timber", maxDistance: 3 },
+    productionCycle: { depositType: "timber", gatherTicks: 40, gatherYield: 1.2, processTicks: 20 }
+  },
+  tekton_ergasterion: {
+    id: "tekton_ergasterion",
+    name: "Carpenter's Workshop",
+    description: "Skilled carpenters saw and plane logs into structural planks.",
+    category: "production",
+    costGold: 22,
+    costResources: { logs: 6, stone: 4 },
+    constructionWork: 6,
+    requiresPriest: false,
+    maxCondition: 95,
+    color: 0x9e7b4a,
+    unlockTier: "recognized",
+    upkeep: {},
+    startingResources: {},
+    staffing: { custodians: 1 },
+    storageCaps: { logs: 20, planks: 24, grain: 4, bread: 4 },
+    recipes: [
+      {
+        id: "saw-planks",
+        consumes: { logs: 0.10 },
+        produces: { planks: 0.08 },
+        dailyRate: 1,
+        notes: "Converts raw logs into construction-grade planks."
+      }
+    ]
+  },
+  lithoxoos: {
+    id: "lithoxoos",
+    name: "Stonecutter's Workshop",
+    description: "Masons shape raw stone into precisely cut blocks for temples and monuments.",
+    category: "production",
+    costGold: 24,
+    costResources: { logs: 4, stone: 6 },
+    constructionWork: 7,
+    requiresPriest: false,
+    maxCondition: 100,
+    color: 0x7a7a72,
+    unlockTier: "recognized",
+    upkeep: {},
+    startingResources: {},
+    staffing: { custodians: 1 },
+    storageCaps: { stone: 20, cut_stone: 24, grain: 4, bread: 4 },
+    recipes: [
+      {
+        id: "cut-stone-blocks",
+        consumes: { stone: 0.10 },
+        produces: { cut_stone: 0.07 },
+        dailyRate: 1,
+        notes: "Converts raw stone into dressed blocks. Slower than plank production."
+      }
+    ]
+  },
+  lithotomia: {
+    id: "lithotomia",
+    name: "Stone Quarry",
+    description: "Quarrymen extract limestone and marble from the sacred cliffs.",
+    category: "production",
+    costGold: 14,
+    constructionWork: 5,
+    requiresPriest: false,
+    maxCondition: 100,
+    color: 0x8a8a80,
+    upkeep: {},
+    startingResources: { stone: 3 },
+    staffing: { custodians: 1 },
+    storageCaps: { stone: 30, grain: 4, bread: 4 },
+    recipes: [
+      {
+        id: "quarry-stone",
+        consumes: {},
+        produces: { stone: 0.12 },
+        dailyRate: 1,
+        notes: "Base stone production. Slower than timber."
+      }
+    ],
+    requiredNearbyTerrain: { terrainTypes: ["limestone"], depositType: "stone", maxDistance: 3 },
+    productionCycle: { depositType: "stone", gatherTicks: 50, gatherYield: 1.0, processTicks: 25 }
+  },
+  ergasterion: {
+    id: "ergasterion",
+    name: "Worker Quarters",
+    description: "Simple lodgings for the carriers and custodians who keep the precinct running.",
+    category: "housing",
+    costGold: 18,
+    costResources: { logs: 4, stone: 3 },
+    constructionWork: 5,
+    requiresPriest: false,
+    maxCondition: 95,
+    color: 0xb8a080,
+    upkeep: { bread: 0.01 },
+    startingResources: {},
+    staffing: { custodians: 1 },
+    housingCapacity: { carriers: 3, custodians: 3 }
+  },
+  apotheke: {
+    id: "apotheke",
+    name: "Supply Depot",
+    description: "A logistics hub that stages materials for construction and ritual supply routes.",
+    category: "storage",
+    costGold: 26,
+    costResources: { logs: 6, stone: 6 },
+    constructionWork: 6,
+    requiresPriest: false,
+    maxCondition: 100,
+    color: 0x8a7652,
+    unlockTier: "recognized",
+    upkeep: {},
+    startingResources: {},
+    storageCaps: {
+      logs: 40,
+      stone: 40,
+      planks: 30,
+      cut_stone: 30
+    },
+    passiveEffects: [
+      {
+        id: "depot-carrier-range",
+        kind: "carrier_range",
+        value: 2,
+        notes: "Carriers assigned near the depot gain extended supply radius."
+      }
+    ]
+  },
+  treasury_of_nations: {
+    id: "treasury_of_nations",
+    name: "Treasury of Nations",
+    description: "A grand vault where offerings from across Hellas are stored, generating steady gold income.",
+    category: "storage",
+    costGold: 60,
+    costResources: { cut_stone: 40, planks: 20 },
+    constructionWork: 12,
+    requiresPriest: true,
+    maxCondition: 130,
+    color: 0xd4af37,
+    unlockTier: "panhellenic",
+    requiredTech: "monumental_construction",
+    cityTierRequirement: "city",
+    upkeep: { incense: 0.01 },
+    startingResources: {},
+    staffing: {
+      priests: { attendant: 1 },
+      custodians: 1
+    },
+    storageCaps: {
+      gold: 200
+    },
+    recipes: [
+      {
+        id: "tribute-collection",
+        consumes: {},
+        produces: { gold: 0.1 },
+        dailyRate: 1,
+        notes: "Panhellenic tribute flows into the treasury."
+      }
+    ],
+    passiveEffects: [
+      { id: "treasury-prestige", kind: "prestige", value: 6, notes: "The wealth of nations elevates Delphi's grandeur." }
+    ]
+  },
+  stoa_of_columns: {
+    id: "stoa_of_columns",
+    name: "Stoa of Columns",
+    description: "A monumental colonnade where citizens gather, bolstering the oracle's public credibility.",
+    category: "trade",
+    costGold: 55,
+    costResources: { cut_stone: 50, planks: 30 },
+    constructionWork: 14,
+    requiresPriest: false,
+    maxCondition: 140,
+    color: 0xc0c0c0,
+    unlockTier: "panhellenic",
+    requiredTech: "monumental_construction",
+    cityTierRequirement: "town",
+    upkeep: { bread: 0.01 },
+    startingResources: {},
+    staffing: {
+      custodians: 2,
+      visitors: 8
+    },
+    passiveEffects: [
+      { id: "stoa-prestige", kind: "prestige", value: 5, notes: "A grand public space attracts dignitaries and scholars." },
+      { id: "stoa-pilgrim", kind: "pilgrim_capacity", value: 4, notes: "The colonnade shelters many visitors." }
+    ]
+  },
+  sacred_theater: {
+    id: "sacred_theater",
+    name: "Sacred Theater",
+    description: "A grand amphitheater for sacred performances and festival rites that inspire pilgrims.",
+    category: "ritual",
+    costGold: 50,
+    costResources: { cut_stone: 30, planks: 40 },
+    constructionWork: 10,
+    requiresPriest: true,
+    maxCondition: 120,
+    color: 0xa0522d,
+    unlockTier: "panhellenic",
+    requiredTech: "monumental_construction",
+    cityTierRequirement: "city",
+    upkeep: { incense: 0.005, bread: 0.01 },
+    startingResources: {},
+    staffing: {
+      priests: { attendant: 1 },
+      custodians: 1,
+      visitors: 12
+    },
+    passiveEffects: [
+      { id: "theater-prestige", kind: "prestige", value: 4, notes: "Sacred performances elevate Delphi's cultural renown." },
+      { id: "theater-omen", kind: "omen_quality", value: 2, notes: "Ritual drama deepens consultation atmosphere." },
+      { id: "theater-donation", kind: "donation", value: 4, notes: "Festival audiences donate generously." }
     ]
   }
 };

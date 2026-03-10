@@ -4,12 +4,17 @@ import {
   buildingDefs,
   legendaryConsultationDefs,
   rivalOracleOperationDefById,
+  techDefById,
+  techDefs,
   type AgeDef,
-  type LegendaryConsultationDef
+  type LegendaryConsultationDef,
+  type TechDef
 } from "@the-oracle/content";
 
 import type {
   BuildingInstance,
+  CityProsperity,
+  CityTier,
   GameState,
   LegendaryConsultationProgress,
   NamedCharacterState,
@@ -23,6 +28,7 @@ import type {
   WalkerInstance,
   WordTile
 } from "../state/gameState";
+import { DEFAULT_CITY_PROSPERITY } from "../simulation/city";
 import type { LegacyArtifact, LegacyPhase } from "../state/legacy";
 import { computeLegacyScore } from "../state/legacy";
 import type { RunRecord, CarryoverBonus, BurdenId } from "../state/lineage";
@@ -36,7 +42,13 @@ import type {
   SacredSite
 } from "../state/excavation";
 import { getAbsoluteDay } from "../simulation/clock";
-import { buildRunSetupOriginOptions, buildRunSetupPreview } from "../state/worldGen";
+import {
+  buildRunSetupDifficultyOptions,
+  buildRunSetupOriginOptions,
+  buildRunSetupPreview,
+  buildRunSetupPythiaOptions,
+  buildRunSetupScenarioOptions
+} from "../state/worldGen";
 
 export function selectSelectedBuilding(state: GameState): BuildingInstance | undefined {
   if (state.ui.selectedEntityKind !== "building") {
@@ -98,6 +110,121 @@ export function selectCarrierSummary(state: GameState) {
     activeJobs: carriers.filter((walker) => Boolean(walker.assignedJobId)).length,
     strainedCount: carriers.filter((walker) => (walker.fatigue ?? 0) >= 45).length,
     distinctRadii
+  };
+}
+
+export type PopulationSummary = {
+  priests: { current: number; cap: number };
+  carriers: { current: number; cap: number };
+  custodians: { current: number; cap: number; assigned: number; unassigned: number };
+  total: { current: number; cap: number };
+  overCap: boolean;
+};
+
+export function selectPopulationSummary(state: GameState): PopulationSummary {
+  let priestCap = 0;
+  let carrierCap = 0;
+  let custodianCap = 0;
+
+  // Precompute housing bonuses from completed tech effects
+  const housingBonusByBuilding: Record<string, { priests: number; carriers: number; custodians: number }> = {};
+  for (const techId of state.research?.completedTechIds ?? []) {
+    const tech = techDefById[techId];
+    if (!tech) continue;
+    for (const effect of tech.effects) {
+      if (effect.kind === "housing_bonus") {
+        const existing = housingBonusByBuilding[effect.buildingId] ?? { priests: 0, carriers: 0, custodians: 0 };
+        existing.priests += effect.bonusSlots.priests ?? 0;
+        existing.carriers += effect.bonusSlots.carriers ?? 0;
+        existing.custodians += effect.bonusSlots.custodians ?? 0;
+        housingBonusByBuilding[effect.buildingId] = existing;
+      }
+    }
+  }
+
+  for (const building of state.buildings) {
+    if (building.constructionWork && (building.constructionProgress ?? 0) < building.constructionWork) {
+      continue; // under construction — no housing
+    }
+    const def = buildingDefs[building.defId];
+    if (def.housingCapacity) {
+      const bonus = housingBonusByBuilding[building.defId];
+      priestCap += (def.housingCapacity.priests ?? 0) + (bonus?.priests ?? 0);
+      carrierCap += (def.housingCapacity.carriers ?? 0) + (bonus?.carriers ?? 0);
+      custodianCap += (def.housingCapacity.custodians ?? 0) + (bonus?.custodians ?? 0);
+    }
+  }
+
+  const priestCount = state.priests.length;
+  const carrierCount = state.walkers.filter((w) => w.role === "carrier").length;
+  const custodians = state.walkers.filter((w) => w.role === "custodian");
+  const custodianCount = custodians.length;
+
+  const assignedCustodianIds = new Set(
+    state.buildings.flatMap((b) => b.assignedWorkerIds)
+  );
+  const assignedCount = custodians.filter((w) => assignedCustodianIds.has(w.id)).length;
+
+  return {
+    priests: { current: priestCount, cap: priestCap },
+    carriers: { current: carrierCount, cap: carrierCap },
+    custodians: { current: custodianCount, cap: custodianCap, assigned: assignedCount, unassigned: custodianCount - assignedCount },
+    total: {
+      current: priestCount + carrierCount + custodianCount,
+      cap: priestCap + carrierCap + custodianCap
+    },
+    overCap: priestCount > priestCap || carrierCount > carrierCap || custodianCount > custodianCap
+  };
+}
+
+export type BuildingStaffingStatus = {
+  buildingId: string;
+  defId: BuildingInstance["defId"];
+  requiredCustodians: number;
+  assignedWorkerIds: string[];
+  assignedWorkerNames: string[];
+  status: "fully_staffed" | "partially_staffed" | "needs_worker" | "no_workers_required";
+};
+
+export function selectBuildingStaffingStatus(
+  state: GameState,
+  buildingId: string
+): BuildingStaffingStatus | undefined {
+  const building = state.buildings.find((b) => b.id === buildingId);
+  if (!building) return undefined;
+
+  const def = buildingDefs[building.defId];
+  const required = def.staffing?.custodians ?? 0;
+
+  if (required === 0) {
+    return {
+      buildingId,
+      defId: building.defId,
+      requiredCustodians: 0,
+      assignedWorkerIds: [],
+      assignedWorkerNames: [],
+      status: "no_workers_required"
+    };
+  }
+
+  const names = building.assignedWorkerIds.map((id) => {
+    const walker = state.walkers.find((w) => w.id === id);
+    return walker?.name ?? "Unknown";
+  });
+
+  const assigned = building.assignedWorkerIds.length;
+  let status: BuildingStaffingStatus["status"];
+  if (assigned >= required) status = "fully_staffed";
+  else if (assigned > 0) status = "partially_staffed";
+  else status = "needs_worker";
+
+  return {
+    buildingId,
+    defId: building.defId,
+    requiredCustodians: required,
+    assignedWorkerIds: building.assignedWorkerIds,
+    assignedWorkerNames: names,
+    status
   };
 }
 
@@ -495,7 +622,11 @@ export function buildProphecyDepthSummary({
   const scoreWeight = score.clarity * 0.05 + score.value * 0.05 - score.risk * 0.09;
   const symbolicCharge = Math.min(8, tiles.length * 1.5) + scaffold.filter((part) => part.state === "charged" || part.state === "stable").length * 2;
   const depth = clamp(Math.round(structure + pythiaCharge + omenCharge + scoreWeight + symbolicCharge - 8), 0, 100);
-  const depthBand = depthBandFor(depth);
+  const rawDepthBand = depthBandFor(depth);
+  // Pythia food need > 50: depth band capped at "grounded" (cannot reach deep/oracular)
+  const depthBand = pythia.needs.food > 50 && (rawDepthBand === "deep" || rawDepthBand === "oracular")
+    ? "grounded" as const
+    : rawDepthBand;
 
   return {
     depth,
@@ -919,13 +1050,32 @@ export function selectWorldSummary(state: GameState) {
   };
 }
 
-export function selectRunSetupOriginOptions(seed?: number | string) {
-  return buildRunSetupOriginOptions(seed);
+export function selectRunSetupOriginOptions(options?: number | string | Parameters<typeof buildRunSetupPreview>[0]) {
+  return buildRunSetupOriginOptions(options);
 }
 
-export function selectRunSetupPreview(seed?: number | string, originId?: GameState["originId"]) {
+export function selectRunSetupScenarioOptions() {
+  return buildRunSetupScenarioOptions();
+}
+
+export function selectRunSetupDifficultyOptions() {
+  return buildRunSetupDifficultyOptions();
+}
+
+export function selectRunSetupPythiaOptions() {
+  return buildRunSetupPythiaOptions();
+}
+
+export function selectRunSetupPreview(
+  optionsOrSeed?: number | string | Parameters<typeof buildRunSetupPreview>[0],
+  originId?: GameState["originId"]
+) {
+  if (typeof optionsOrSeed === "object" && optionsOrSeed !== null) {
+    return buildRunSetupPreview(optionsOrSeed);
+  }
+
   return buildRunSetupPreview({
-    seed,
+    seed: optionsOrSeed,
     originId
   });
 }
@@ -933,7 +1083,11 @@ export function selectRunSetupPreview(seed?: number | string, originId?: GameSta
 export function selectCurrentRunSetupPreview(state: GameState) {
   return buildRunSetupPreview({
     seed: state.worldSeedText,
-    originId: state.originId
+    originId: state.originId,
+    scenarioId: state.runConfig.scenarioId,
+    difficultyId: state.runConfig.difficultyId,
+    pythiaArchetypeId: state.runConfig.pythiaArchetypeId,
+    startingRegionId: state.runConfig.startingRegionId
   });
 }
 
@@ -959,6 +1113,11 @@ export function renderGameToText(state: GameState): string {
       seedText: state.worldSeedText,
       originId: state.originId,
       originTitle: state.worldGeneration.originTitle,
+      scenarioId: state.runConfig.scenarioId,
+      difficultyId: state.runConfig.difficultyId,
+      pythiaArchetypeId: state.runConfig.pythiaArchetypeId,
+      startingRegionId: state.runConfig.startingRegionId,
+      pythiaName: state.pythia.name,
       challengeTags: state.worldGeneration.challengeTags,
       scoreModifier: state.worldGeneration.scoreModifier,
       disabledSystems: state.worldGeneration.disabledSystems
@@ -977,7 +1136,8 @@ export function renderGameToText(state: GameState): string {
       needs: {
         rest: Math.round(state.pythia.needs.rest),
         purification: Math.round(state.pythia.needs.purification),
-        pilgrimageCooldown: Math.round(state.pythia.needs.pilgrimageCooldown)
+        pilgrimageCooldown: Math.round(state.pythia.needs.pilgrimageCooldown),
+        food: Math.round(state.pythia.needs.food)
       }
     },
     buildings: state.buildings.map((building) => ({
@@ -1608,4 +1768,56 @@ export function selectEnrichedEventFeed(state: GameState): EnrichedEventFeedItem
       narratedDescription
     };
   });
+}
+
+export function selectCityProsperity(state: GameState): CityProsperity {
+  return state.cityProsperity ?? DEFAULT_CITY_PROSPERITY;
+}
+
+export function selectVisitorStatus(state: GameState): {
+  count: number;
+  capacity: number;
+  satisfaction: number;
+  tier: CityTier;
+} {
+  const cp = state.cityProsperity ?? DEFAULT_CITY_PROSPERITY;
+  // Simple satisfaction heuristic based on food availability
+  const breadAmount = state.resources.bread?.amount ?? 0;
+  const grainAmount = state.resources.grain?.amount ?? 0;
+  const foodScore = Math.min(50, breadAmount + grainAmount * 0.5);
+  const completedBuildings = state.buildings.filter(
+    (b) => !((b.constructionWork ?? 0) > 0 && (b.constructionProgress ?? 0) < (b.constructionWork ?? 0))
+  );
+  const avgCondition = completedBuildings.length > 0
+    ? completedBuildings.reduce((sum, b) => sum + b.condition / b.maxCondition, 0) / completedBuildings.length * 100
+    : 50;
+  const satisfaction = Math.max(0, Math.min(100, (foodScore + avgCondition) / 2));
+
+  return {
+    count: cp.visitorCount,
+    capacity: cp.visitorCapacity,
+    satisfaction,
+    tier: cp.cityTier
+  };
+}
+
+/** Returns the list of techs whose prerequisites are met but that are not yet completed. */
+export function selectAvailableResearch(state: GameState): TechDef[] {
+  const completedIds = state.research?.completedTechIds ?? [];
+  return techDefs.filter((tech) => {
+    if (completedIds.includes(tech.id)) return false;
+    if (tech.requires) {
+      return tech.requires.every((req) => completedIds.includes(req));
+    }
+    return true;
+  });
+}
+
+/** Returns the cheapest available (prerequisites met, not completed) tech, or undefined if none. */
+export function selectAutoSuggestResearch(state: GameState): TechDef | undefined {
+  const available = selectAvailableResearch(state);
+  if (available.length === 0) return undefined;
+  return available.reduce((cheapest, tech) =>
+    tech.knowledgeCost < cheapest.knowledgeCost ? tech : cheapest
+  );
 }

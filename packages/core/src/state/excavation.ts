@@ -84,6 +84,7 @@ export type ExcavationState = {
   sites: ExcavationSite[];
   relics: Relic[];
   sacredSites: SacredSite[];
+  claimedRelics: Relic[];
 };
 
 // --- Deterministic seeded RNG helpers ---
@@ -253,6 +254,7 @@ export function createInitialExcavationState(worldSeed: number): ExcavationState
   return {
     sites,
     relics: pregenRelics,
-    sacredSites
+    sacredSites,
+    claimedRelics: []
   };
 }

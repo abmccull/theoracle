@@ -1,5 +1,16 @@
 import { WorldMapPanel } from "./WorldMapPanel";
-import type { RunSetupOriginOption, RunSetupWorldPreview, WorldFactionShare, WorldHistoryEntry, WorldMetric, WorldPressureSummary } from "./worldPreview";
+import type {
+  RunSetupCityOption,
+  RunSetupDifficultyOption,
+  RunSetupOriginOption,
+  RunSetupPythiaOption,
+  RunSetupScenarioOption,
+  RunSetupWorldPreview,
+  WorldFactionShare,
+  WorldHistoryEntry,
+  WorldMetric,
+  WorldPressureSummary
+} from "./worldPreview";
 import { clampMeter, toneClass } from "./worldPreview";
 
 type RunSetupPanelProps = {
@@ -8,9 +19,21 @@ type RunSetupPanelProps = {
   seed: string;
   onSeedChange?: (seed: string) => void;
   onSeedRandomize?: () => void;
+  scenarios: RunSetupScenarioOption[];
+  selectedScenarioId?: string;
+  onSelectScenario?: (scenarioId: string) => void;
+  difficulties: RunSetupDifficultyOption[];
+  selectedDifficultyId?: string;
+  onSelectDifficulty?: (difficultyId: string) => void;
   origins: RunSetupOriginOption[];
   selectedOriginId?: string;
   onSelectOrigin?: (originId: string) => void;
+  pythias: RunSetupPythiaOption[];
+  selectedPythiaId?: string;
+  onSelectPythia?: (pythiaId: string) => void;
+  startingCities: RunSetupCityOption[];
+  selectedStartingCityId?: string;
+  onSelectStartingCity?: (cityId: string) => void;
   preview?: RunSetupWorldPreview;
   onStart?: () => void;
   startLabel?: string;
@@ -88,23 +111,175 @@ function renderHistory(items: WorldHistoryEntry[]) {
   );
 }
 
+function renderScenarioCards(
+  scenarios: RunSetupScenarioOption[],
+  selectedScenarioId: string | undefined,
+  onSelectScenario: ((scenarioId: string) => void) | undefined,
+  idPrefix: string
+) {
+  return (
+    <div className="run-setup-origin-grid">
+      {scenarios.map((scenario) => {
+        const active = scenario.id === selectedScenarioId;
+        return (
+          <button
+            key={scenario.id}
+            className={`setup-origin-card ${active ? "active" : ""}`}
+            data-testid={`${idPrefix}-scenario-${scenario.id}`}
+            id={`${idPrefix}-scenario-${scenario.id}`}
+            onClick={() => onSelectScenario?.(scenario.id)}
+            type="button"
+          >
+            <span className="section-title">{scenario.label}</span>
+            {typeof scenario.difficulty === "number" ? <span className="inspector-subline">Scenario difficulty {scenario.difficulty}/5</span> : null}
+            <span className="campaign-copy">{scenario.summary}</span>
+            {scenario.recommendedStartingTier ? <span className="campaign-copy">Recommended tier {scenario.recommendedStartingTier}</span> : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function renderDifficultyChips(
+  difficulties: RunSetupDifficultyOption[],
+  selectedDifficultyId: string | undefined,
+  onSelectDifficulty: ((difficultyId: string) => void) | undefined,
+  idPrefix: string
+) {
+  return (
+    <div className="world-chip-row">
+      {difficulties.map((difficulty) => {
+        const active = difficulty.id === selectedDifficultyId;
+        return (
+          <button
+            key={difficulty.id}
+            className={`world-chip ${toneClass(difficulty.tone)} ${active ? "active" : ""}`}
+            data-testid={`${idPrefix}-difficulty-${difficulty.id}`}
+            id={`${idPrefix}-difficulty-${difficulty.id}`}
+            onClick={() => onSelectDifficulty?.(difficulty.id)}
+            type="button"
+          >
+            <strong>{difficulty.label}</strong>
+            <span>{difficulty.summary}</span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function renderPythiaCards(
+  pythias: RunSetupPythiaOption[],
+  selectedPythiaId: string | undefined,
+  onSelectPythia: ((pythiaId: string) => void) | undefined,
+  idPrefix: string
+) {
+  return (
+    <div className="run-setup-origin-grid">
+      {pythias.map((pythia) => {
+        const active = pythia.id === selectedPythiaId;
+        return (
+          <button
+            key={pythia.id}
+            className={`setup-origin-card ${active ? "active" : ""}`}
+            data-testid={`${idPrefix}-pythia-${pythia.id}`}
+            id={`${idPrefix}-pythia-${pythia.id}`}
+            onClick={() => onSelectPythia?.(pythia.id)}
+            type="button"
+          >
+            <span className="section-title">{pythia.label}</span>
+            {pythia.title ? <span className="inspector-subline">{pythia.title}</span> : null}
+            <span className="campaign-copy">{pythia.summary}</span>
+            {pythia.traits.length ? (
+              <span className="world-chip-row">
+                {pythia.traits.map((trait) => (
+                  <span key={trait} className="world-chip tone-watchful compact">
+                    {trait}
+                  </span>
+                ))}
+              </span>
+            ) : null}
+            {pythia.statline ? <span className="campaign-copy">{pythia.statline}</span> : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function renderCityCards(
+  cities: RunSetupCityOption[],
+  selectedStartingCityId: string | undefined,
+  onSelectStartingCity: ((cityId: string) => void) | undefined,
+  idPrefix: string
+) {
+  return (
+    <div className="run-setup-origin-grid">
+      {cities.map((city) => {
+        const active = city.id === selectedStartingCityId;
+        return (
+          <button
+            key={city.id}
+            className={`setup-origin-card ${active ? "active" : ""}`}
+            data-testid={`${idPrefix}-city-${city.id}`}
+            id={`${idPrefix}-city-${city.id}`}
+            onClick={() => onSelectStartingCity?.(city.id)}
+            type="button"
+          >
+            <span className="section-title">{city.label}</span>
+            {city.controllingFactionLabel ? <span className="inspector-subline">{city.controllingFactionLabel}</span> : null}
+            <span className="campaign-copy">{city.summary}</span>
+            {city.pressure ? <span className="campaign-copy">Pressure {city.pressure}</span> : null}
+            {city.tags?.length ? (
+              <span className="world-chip-row">
+                {city.tags.map((tag) => (
+                  <span key={tag} className="world-chip tone-steady compact">
+                    {tag}
+                  </span>
+                ))}
+              </span>
+            ) : null}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 export function RunSetupPanel({
-  title = "New Run",
-  eyebrow = "Found the Next Oracle",
+  title = "Start New Game",
+  eyebrow = "Cast the Opening Lots",
   seed,
   onSeedChange,
   onSeedRandomize,
+  scenarios,
+  selectedScenarioId,
+  onSelectScenario,
+  difficulties,
+  selectedDifficultyId,
+  onSelectDifficulty,
   origins,
   selectedOriginId,
   onSelectOrigin,
+  pythias,
+  selectedPythiaId,
+  onSelectPythia,
+  startingCities,
+  selectedStartingCityId,
+  onSelectStartingCity,
   preview,
   onStart,
-  startLabel = "Begin the Omen Cycle",
+  startLabel = "Start New Game",
   disabled = false,
   note,
   idPrefix = "run-setup"
 }: RunSetupPanelProps) {
   const selectedOrigin = origins.find((origin) => origin.id === selectedOriginId) ?? origins[0];
+  const selectedScenario = scenarios.find((scenario) => scenario.id === selectedScenarioId);
+  const selectedDifficulty = difficulties.find((difficulty) => difficulty.id === selectedDifficultyId);
+  const selectedPythia = pythias.find((pythia) => pythia.id === selectedPythiaId);
+  const selectedCity = startingCities.find((city) => city.id === selectedStartingCityId);
 
   return (
     <section className="run-setup-panel panel">
@@ -112,10 +287,11 @@ export function RunSetupPanel({
         <div>
           <div className="eyebrow">{eyebrow}</div>
           <div className="headline">{title}</div>
+          <div className="campaign-copy">Choose the oracle, the seer, the opening polis, and the pressure level before the precinct begins.</div>
         </div>
         <div className="run-setup-actions">
           <label className="seed-field" htmlFor={`${idPrefix}-seed-input`}>
-            <span className="section-title">Seed</span>
+            <span className="section-title">World Seed</span>
             <input
               id={`${idPrefix}-seed-input`}
               data-testid={`${idPrefix}-seed-input`}
@@ -149,49 +325,71 @@ export function RunSetupPanel({
       </div>
       <div className="run-setup-shell">
         <div className="run-setup-column">
-          <div className="section-title">Choose an Origin</div>
-          <div className="run-setup-origin-grid">
-            {origins.map((origin) => {
-              const active = origin.id === selectedOrigin?.id;
-              return (
-                <button
-                  key={origin.id}
-                  className={`setup-origin-card ${active ? "active" : ""}`}
-                  disabled={origin.disabled}
-                  id={`${idPrefix}-origin-${origin.id}`}
-                  data-testid={`${idPrefix}-origin-${origin.id}`}
-                  onClick={() => onSelectOrigin?.(origin.id)}
-                  type="button"
-                >
-                  <span className="section-title">{origin.title ?? origin.label}</span>
-                  {origin.subtitle ? <span className="inspector-subline">{origin.subtitle}</span> : null}
-                  <span className="campaign-copy">{origin.summary}</span>
-                  <span className="campaign-copy">Climate {origin.climate}</span>
-                  <span className="campaign-copy">Divine Mood {origin.divineMood}</span>
-                  <span className="campaign-copy">Oracle Density {origin.oracleDensity}</span>
-                  <span className="campaign-copy">Faction Mix {origin.factionMix}</span>
-                  {origin.tags?.length ? (
-                    <span className="world-chip-row">
-                      {origin.tags.map((tag) => (
-                        <span key={tag} className="world-chip tone-steady compact">
-                          {tag}
-                        </span>
-                      ))}
-                    </span>
-                  ) : null}
-                </button>
-              );
-            })}
+          <div className="campaign-list">
+            <div className="section-title">Campaign Arc</div>
+            {renderScenarioCards(scenarios, selectedScenarioId, onSelectScenario, idPrefix)}
           </div>
-          {selectedOrigin ? (
-            <div className="campaign-list">
-              <div className="section-title">Selected Origin</div>
-              <div className="headline">{selectedOrigin.title ?? selectedOrigin.label}</div>
-              <div className="campaign-copy">{selectedOrigin.summary}</div>
+          <div className="campaign-list">
+            <div className="section-title">Difficulty</div>
+            {renderDifficultyChips(difficulties, selectedDifficultyId, onSelectDifficulty, idPrefix)}
+          </div>
+          <div className="campaign-list">
+            <div className="section-title">Choose an Oracle</div>
+            <div className="run-setup-origin-grid">
+              {origins.map((origin) => {
+                const active = origin.id === selectedOrigin?.id;
+                return (
+                  <button
+                    key={origin.id}
+                    className={`setup-origin-card ${active ? "active" : ""}`}
+                    disabled={origin.disabled}
+                    id={`${idPrefix}-origin-${origin.id}`}
+                    data-testid={`${idPrefix}-origin-${origin.id}`}
+                    onClick={() => onSelectOrigin?.(origin.id)}
+                    type="button"
+                  >
+                    <span className="section-title">{origin.title ?? origin.label}</span>
+                    {origin.subtitle ? <span className="inspector-subline">{origin.subtitle}</span> : null}
+                    <span className="campaign-copy">{origin.summary}</span>
+                    <span className="campaign-copy">Climate {origin.climate}</span>
+                    <span className="campaign-copy">Divine Mood {origin.divineMood}</span>
+                    <span className="campaign-copy">Oracle Density {origin.oracleDensity}</span>
+                    <span className="campaign-copy">Faction Mix {origin.factionMix}</span>
+                    {origin.tags?.length ? (
+                      <span className="world-chip-row">
+                        {origin.tags.map((tag) => (
+                          <span key={tag} className="world-chip tone-steady compact">
+                            {tag}
+                          </span>
+                        ))}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
             </div>
-          ) : null}
+          </div>
+          <div className="campaign-list">
+            <div className="section-title">Choose the Pythia</div>
+            {renderPythiaCards(pythias, selectedPythiaId, onSelectPythia, idPrefix)}
+          </div>
+          <div className="campaign-list">
+            <div className="section-title">Opening Polis</div>
+            {renderCityCards(startingCities, selectedStartingCityId, onSelectStartingCity, idPrefix)}
+          </div>
         </div>
         <div className="run-setup-column run-setup-preview-column">
+          {selectedScenario || selectedDifficulty || selectedPythia || selectedOrigin || selectedCity ? (
+            <div className="setup-preview-summary">
+              <div className="section-title">Chosen Opening</div>
+              <div className="headline">
+                {selectedScenario?.label ?? "Campaign"} · {selectedOrigin?.title ?? selectedOrigin?.label ?? "Oracle"} · {selectedPythia?.label ?? "Pythia"}
+              </div>
+              <div className="campaign-copy">
+                {selectedDifficulty?.label ?? "Oracle"} difficulty from {selectedCity?.label ?? "Delphi"}.
+              </div>
+            </div>
+          ) : null}
           <div className="section-title">World Preview</div>
           {preview ? (
             <>

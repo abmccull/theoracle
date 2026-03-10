@@ -27,7 +27,7 @@ export function CharactersPanel({ state }: { state: GameState }) {
   const spotlight = useMemo(() => selectCharacterSpotlight(state), [state]);
 
   if (roster.length === 0) {
-    return <div className="text-sm" style={{ color: "var(--text-dim)" }}>No notable characters encountered.</div>;
+    return <div className="text-sm text-dim">No notable characters encountered.</div>;
   }
 
   return (
@@ -41,11 +41,11 @@ export function CharactersPanel({ state }: { state: GameState }) {
                 <strong>{ch.displayName}</strong>
                 <span className={`condition-badge ${TONE_BADGE[ch.tone] ?? ""}`}>{ch.tone}</span>
               </div>
-              <div className="text-xs" style={{ color: "var(--text-dim)" }}>
+              <div className="text-xs text-dim">
                 {ch.role}{ch.factionName ? ` · ${ch.factionName}` : ""}
               </div>
               {ch.memoryHook ? (
-                <div className="text-xs" style={{ color: "var(--text-mid)", fontStyle: "italic" }}>{ch.memoryHook}</div>
+                <div className="text-xs text-mid text-italic">{ch.memoryHook}</div>
               ) : null}
             </div>
           ))}
@@ -60,7 +60,7 @@ export function CharactersPanel({ state }: { state: GameState }) {
               <span className="character-roster-name">{ch.displayName}</span>
               <span className={`condition-badge ${TONE_BADGE[ch.tone] ?? ""}`}>{ch.tone}</span>
             </div>
-            <div className="text-xs" style={{ color: "var(--text-dim)" }}>
+            <div className="text-xs text-dim">
               {ch.role}{ch.factionName ? ` · ${ch.factionName}` : ""} · Influence {ch.influence}
             </div>
             <div className="character-relationship-bars">

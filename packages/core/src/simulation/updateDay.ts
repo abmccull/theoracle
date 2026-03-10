@@ -1,5 +1,5 @@
-import { ageDefs, buildingDefs, legendaryConsultationDefs, legendaryConsultationIds, resourceDefs } from "@the-oracle/content";
-import type { LegendaryConsultationId } from "@the-oracle/content";
+import { ageDefs, buildingDefs, legendaryConsultationDefs, legendaryConsultationIds, resourceDefs, techDefById } from "@the-oracle/content";
+import type { LegendaryConsultationId, TechId } from "@the-oracle/content";
 
 import type {
   BuildingInstance,
@@ -12,6 +12,7 @@ import type {
   WalkerInstance,
   WalkerState
 } from "../state/gameState";
+import { isBuildingUnderConstruction } from "../state/gameState";
 import { advanceAge, createInitialAgeState } from "../state/ages";
 import { advanceCampaignState } from "../state/campaign";
 import { carrierProfileForIndex, normalizeCarrierWalker } from "../state/carriers";
@@ -23,14 +24,74 @@ import {
   advanceWorldHistory,
   evaluateResolutionObservers,
   generateAdvisorMessages,
+  applyAdvisorPersonality,
   maybeCreateConsultation,
-  resolveConsequence
+  resolveConsequence,
+  updateFactionMemory
 } from "./events";
 import { getAbsoluteDay } from "./clock";
 import { narrateAgeTransition } from "../textgen/worldNarrator";
 import { advanceDecline } from "./decline";
+import { updateMarketPrices, advancePatronContracts, advanceLoanPayments } from "./economy";
+import { processTradeOffers } from "./trade";
 import { advanceEspionage } from "./espionage";
-import { advanceProphecyArcs } from "./prophecyArcs";
+import { advanceEventChains } from "./eventChains";
+import { advanceProphecyArcs, resolveFollowUp, resolveContradictions } from "./prophecyArcs";
+import { advanceBeliefStrength, applyInterpretationBranchEffects } from "./prophecyFeedback";
+import { advanceDiplomacy } from "./diplomacy";
+import { advanceRivalStrategies } from "./rivalStrategies";
+import { processFoodConsumption, HUNGER_STARVING_TICKS, STARVING_EFFICIENCY } from "./food";
+import { advancePriestExperience } from "./priests";
+import { advanceCharacterArcs } from "./characters";
+import { advanceFestivals, advanceWeather } from "./festivals";
+import { checkAchievements, advanceHubris } from "./achievements";
+import { processSpoilage } from "./spoilage";
+import { advanceWorkerPhases } from "./production";
+import { regenerateDeposits } from "../terrain/deposits";
+import { advanceCityGrowth, processVisitorEconomy, DEFAULT_CITY_PROSPERITY } from "./city";
+import type { WalkerTraitId } from "../state/gameState";
+
+// ── Walker Trait & Skill Helpers ──
+
+/** Check if a walker has a specific trait. */
+export function walkerHasTrait(walker: WalkerInstance, traitId: WalkerTraitId): boolean {
+  return walker.traits?.includes(traitId) ?? false;
+}
+
+/** Skill level thresholds: 0→L1, 20→L2, 40→L3, 60→L4, 80→L5. */
+export function computeSkillLevel(experience: number): number {
+  if (experience >= 80) return 5;
+  if (experience >= 60) return 4;
+  if (experience >= 40) return 3;
+  if (experience >= 20) return 2;
+  return 1;
+}
+
+/** Each skill level: +5% production efficiency (multiplicative with traits). */
+export function getSkillMultiplier(walker: WalkerInstance): number {
+  const level = walker.skillLevel ?? 1;
+  return 1 + (level - 1) * 0.05;
+}
+
+/** Get morale-based efficiency multiplier. Low (<20) → 0.5, High (>70) → 1.1, else 1.0. */
+export function getMoraleMultiplier(walker: WalkerInstance): number {
+  const morale = walker.morale ?? 50;
+  if (morale < 20) return 0.5;
+  if (morale > 70) return 1.1;
+  return 1.0;
+}
+
+/** Get the combined worker efficiency from traits, skill, and morale. */
+export function getWorkerEfficiency(walker: WalkerInstance): number {
+  let multiplier = 1.0;
+  if (walkerHasTrait(walker, "industrious")) multiplier *= 1.20;
+  multiplier *= getSkillMultiplier(walker);
+  multiplier *= getMoraleMultiplier(walker);
+  return multiplier;
+}
+
+/** Ritual building IDs that benefit from the devout trait. */
+const RITUAL_BUILDING_IDS = new Set(["inner_sanctum", "sacrificial_altar", "eternal_flame_brazier", "sacred_theater"]);
 
 function coordKey(x: number, y: number): string {
   return `${x},${y}`;
@@ -49,7 +110,7 @@ function neighbors(x: number, y: number): { x: number; y: number }[] {
   ];
 }
 
-function findPath(state: GameState, start: { x: number; y: number }, goal: { x: number; y: number }): { x: number; y: number }[] {
+export function findPath(state: GameState, start: { x: number; y: number }, goal: { x: number; y: number }): { x: number; y: number }[] {
   if (start.x === goal.x && start.y === goal.y) {
     return [];
   }
@@ -138,6 +199,27 @@ function tileDistance(left: { x: number; y: number }, right: { x: number; y: num
   return Math.abs(left.x - right.x) + Math.abs(left.y - right.y);
 }
 
+/** Computes the production multiplier from adjacency bonuses.  Returns 1 when no bonuses apply. */
+export function computeAdjacencyMultiplier(
+  building: BuildingInstance,
+  allBuildings: BuildingInstance[],
+  buildingDef: { adjacencyBonuses?: { nearDefId: string; bonusKind: string; value: number; maxDistance: number }[] }
+): number {
+  if (!buildingDef.adjacencyBonuses?.length) return 1;
+  let multiplier = 1;
+  for (const bonus of buildingDef.adjacencyBonuses) {
+    if (bonus.bonusKind !== "production") continue;
+    const nearby = allBuildings.some((b) => {
+      if (b.id === building.id) return false;
+      if (b.defId !== bonus.nearDefId) return false;
+      const dist = Math.abs(b.position.x - building.position.x) + Math.abs(b.position.y - building.position.y);
+      return dist <= bonus.maxDistance;
+    });
+    if (nearby) multiplier += bonus.value;
+  }
+  return multiplier;
+}
+
 const storehouseBufferTargets: Partial<Record<ResourceId, number>> = {
   olive_oil: 6,
   incense: 4,
@@ -162,8 +244,23 @@ const productionInputTargets: Partial<Record<BuildingInstance["defId"], Partial<
   library: { scrolls: 3 }
 };
 
-function storageCapFor(building: BuildingInstance, resourceId: ResourceId): number {
-  return buildingDefs[building.defId].storageCaps?.[resourceId] ?? Number.POSITIVE_INFINITY;
+/** Base storage cap from building def, plus any tech-based storage bonuses. */
+function storageCapFor(building: BuildingInstance, resourceId: ResourceId, state?: GameState): number {
+  const baseCap = buildingDefs[building.defId].storageCaps?.[resourceId] ?? Number.POSITIVE_INFINITY;
+  if (baseCap === Number.POSITIVE_INFINITY) return baseCap;
+  if (!state?.research?.completedTechIds.length) return baseCap;
+
+  let techBonus = 0;
+  for (const techId of state.research.completedTechIds) {
+    const tech = techDefById[techId];
+    if (!tech) continue;
+    for (const effect of tech.effects) {
+      if (effect.kind === "storage_bonus" && effect.resourceId === resourceId) {
+        techBonus += effect.bonusCapacity;
+      }
+    }
+  }
+  return baseCap + techBonus;
 }
 
 function rebalanceStorehouseBuffers(state: GameState): GameState {
@@ -304,7 +401,7 @@ function carrierDispatchScore(
 
   const fatigue = walker.fatigue ?? 0;
   const haulingSkill = walker.haulingSkill ?? 55;
-  const supplyRadius = walker.supplyRadius ?? 8;
+  const supplyRadius = (walker.supplyRadius ?? 8) + getTechCarrierCapacityBonus(state);
   const distanceToSource = tileDistance(walker.tile, sourceBuilding.position);
   const haulDistance = carrierRouteDistance(state, job);
   const radiusOverage = Math.max(0, haulDistance - supplyRadius);
@@ -375,6 +472,7 @@ function scheduleResourceJobs(state: GameState): GameState {
   const springs = nextState.buildings.filter((building) => building.defId === "castalian_spring");
   const sanctums = nextState.buildings.filter((building) => building.defId === "inner_sanctum");
   const braziers = nextState.buildings.filter((building) => building.defId === "eternal_flame_brazier");
+
   const granaries = nextState.buildings.filter((building) => building.defId === "granary");
   const kitchens = nextState.buildings.filter((building) => building.defId === "kitchen");
   const animalPens = nextState.buildings.filter((building) => building.defId === "animal_pen");
@@ -498,7 +596,7 @@ function scheduleResourceJobs(state: GameState): GameState {
       return;
     }
 
-    const openCapacity = Math.max(0, storageCapFor(targetBuilding, resourceId) - projectedStored(targetBuilding, resourceId));
+    const openCapacity = Math.max(0, storageCapFor(targetBuilding, resourceId, state) - projectedStored(targetBuilding, resourceId));
     if (openCapacity <= 0) {
       return;
     }
@@ -689,7 +787,7 @@ function assignWalkerTargets(state: GameState): GameState {
       }
     }
 
-    if (walker.role === "custodian") {
+    if (walker.role === "custodian" && !walker.assignmentBuildingId) {
       const degraded = [...state.buildings].sort((left, right) => left.condition - right.condition)[0];
       if (degraded && degraded.condition < degraded.maxCondition) {
         const target = nearestRoad(state, degraded) ?? degraded.position;
@@ -788,12 +886,15 @@ function moveWalkers(state: GameState): GameState {
       ? Math.max(0, Math.min(100, (nextFatigue ?? walker.fatigue ?? 0) + (activeCarrierJob ? 0.45 : 0.08)))
       : nextFatigue;
     const fatigueSlowdown = isCarrier ? Math.floor((movedFatigue ?? 0) / 30) : 0;
+    const baseCooldown = 6 + fatigueSlowdown;
+    const swiftReduction = walkerHasTrait(walker, "swift") ? 0.25 : 0;
+    const finalCooldown = Math.max(1, Math.round(baseCooldown * (1 - swiftReduction)));
 
     return {
       ...walker,
       tile: next,
       path: rest,
-      moveCooldown: 6 + fatigueSlowdown,
+      moveCooldown: finalCooldown,
       fatigue: movedFatigue
     };
   });
@@ -804,15 +905,56 @@ function moveWalkers(state: GameState): GameState {
   };
 }
 
+function advanceConstruction(building: BuildingInstance, state: GameState, events: GameEvent[]): BuildingInstance {
+  if (!isBuildingUnderConstruction(building)) {
+    return building;
+  }
+  const work = building.constructionWork!;
+  const progress = building.constructionProgress ?? 0;
+
+  // Each tick, an unassigned custodian near the building advances construction by 1 work unit
+  const nearbyCustodian = state.walkers.find(
+    (walker) => walker.role === "custodian"
+      && !walker.assignmentBuildingId
+      && Math.abs(walker.tile.x - building.position.x) <= 2
+      && Math.abs(walker.tile.y - building.position.y) <= 2
+  );
+  if (!nearbyCustodian) {
+    return building;
+  }
+
+  const speedMultiplier = getTechConstructionSpeedMultiplier(state);
+  const builderBonus = walkerHasTrait(nearbyCustodian, "skilled_builder") ? 1.30 : 1.0;
+  const nextProgress = Math.min(work, progress + 1 * speedMultiplier * builderBonus);
+  if (nextProgress >= work) {
+    // Construction complete — grant starting resources and full condition
+    const def = buildingDefs[building.defId];
+    events.push({ type: "ConstructionComplete", buildingId: building.id, defId: building.defId });
+    return {
+      ...building,
+      constructionProgress: work,
+      condition: def.maxCondition,
+      storedResources: { ...def.startingResources }
+    };
+  }
+  return { ...building, constructionProgress: nextProgress };
+}
+
 function processBuildings(state: GameState, events: GameEvent[]): GameState {
   let resources = state.resources;
   const buildings = state.buildings.map((building) => {
     const def = buildingDefs[building.defId];
-    let next = { ...building };
+    let next = advanceConstruction(building, state, events);
+
+    // Skip all processing for buildings still under construction
+    if (isBuildingUnderConstruction(next)) {
+      return next;
+    }
+    next = { ...next };
 
     if (building.defId === "eternal_flame_brazier") {
       const oil = next.storedResources.olive_oil ?? 0;
-      const consumption = def.upkeep.olive_oil ?? 0;
+      const consumption = (def.upkeep.olive_oil ?? 0) * getTechUpkeepMultiplier(state, "eternal_flame_brazier", "olive_oil");
       const actualConsumption = Math.min(oil, consumption);
       const nextOil = Math.max(0, oil - actualConsumption);
       next = {
@@ -835,7 +977,8 @@ function processBuildings(state: GameState, events: GameEvent[]): GameState {
     }
 
     if (building.defId === "inner_sanctum") {
-      const incenseDemand = state.consultation.mode === "open" ? 0.035 : 0.01;
+      const incenseUpkeepMult = getTechUpkeepMultiplier(state, "inner_sanctum", "incense");
+      const incenseDemand = (state.consultation.mode === "open" ? 0.035 : 0.01) * incenseUpkeepMult;
       const waterDemand = state.consultation.mode === "open" ? 0.03 : 0.008;
       const availableIncense = next.storedResources.incense ?? 0;
       const availableWater = next.storedResources.sacred_water ?? 0;
@@ -860,6 +1003,7 @@ function processBuildings(state: GameState, events: GameEvent[]): GameState {
     }
 
     const processRecipeBuilding = () => {
+      if (def.productionCycle) return; // handled by advanceWorkerPhases
       if (!def.recipes || def.recipes.length === 0) {
         return;
       }
@@ -870,6 +1014,31 @@ function processBuildings(state: GameState, events: GameEvent[]): GameState {
         }
 
         let throughput = recipe.dailyRate / state.clock.ticksPerDay;
+
+        // Worker-gated production: if building requires custodians, check assignedWorkerIds
+        const requiredCustodians = def.staffing?.custodians ?? 0;
+        if (requiredCustodians > 0 && !recipe.requiresRoles?.length) {
+          if (next.assignedWorkerIds.length === 0) {
+            continue; // No workers assigned — skip production
+          }
+          const staffingRatio = Math.min(1, next.assignedWorkerIds.length / requiredCustodians);
+          throughput *= staffingRatio;
+
+          // Worker efficiency: hunger, traits (industrious), skill level, and morale
+          const workers = next.assignedWorkerIds
+            .map((id) => state.walkers.find((w) => w.id === id))
+            .filter(Boolean) as WalkerInstance[];
+          if (workers.length > 0) {
+            const avgEfficiency = workers.reduce((sum, w) => {
+              let eff = 1.0;
+              if ((w.hungerTicks ?? 0) >= HUNGER_STARVING_TICKS) eff = STARVING_EFFICIENCY;
+              // Apply trait, skill, and morale multipliers
+              eff *= getWorkerEfficiency(w);
+              return sum + eff;
+            }, 0) / workers.length;
+            throughput *= avgEfficiency;
+          }
+        }
         if (throughput <= 0) {
           continue;
         }
@@ -886,7 +1055,7 @@ function processBuildings(state: GameState, events: GameEvent[]): GameState {
           if (!amount) {
             continue;
           }
-          const openCapacity = Math.max(0, storageCapFor(next, resourceId) - (next.storedResources[resourceId] ?? 0));
+          const openCapacity = Math.max(0, storageCapFor(next, resourceId, state) - (next.storedResources[resourceId] ?? 0));
           throughput = Math.min(throughput, openCapacity / amount);
         }
 
@@ -900,6 +1069,19 @@ function processBuildings(state: GameState, events: GameEvent[]): GameState {
           }
         }
         throughput *= seasonalMult;
+
+        // Tech-based production bonus
+        throughput *= getTechProductionMultiplier(state, building.defId, recipe.id);
+
+        // Relic and sacred site production bonus
+        const relicProductionBonus = getRelicBonus(state, "resource_production");
+        const sacredProductionBonus = getSacredSiteBonus(state, "resource_production");
+        if (relicProductionBonus > 0 || sacredProductionBonus > 0) {
+          throughput *= 1 + (relicProductionBonus + sacredProductionBonus) / 100;
+        }
+
+        // Adjacency bonus
+        throughput *= computeAdjacencyMultiplier(next, state.buildings, def);
 
         // Condition-based efficiency — no penalty above 80%, linear ramp below
         const conditionRatio = next.condition / next.maxCondition;
@@ -937,7 +1119,7 @@ function processBuildings(state: GameState, events: GameEvent[]): GameState {
             ...next,
             storedResources: {
               ...next.storedResources,
-              [resourceId]: Math.min(storageCapFor(next, resourceId), (next.storedResources[resourceId] ?? 0) + delta)
+              [resourceId]: Math.min(storageCapFor(next, resourceId, state), (next.storedResources[resourceId] ?? 0) + delta)
             }
           };
           resources = updateResourceLedger(resources, resourceId, delta);
@@ -1080,18 +1262,22 @@ function processCarriers(state: GameState): GameState {
 }
 
 function processCustodianRepairs(state: GameState): GameState {
-  const custodian = state.walkers.find((walker) => walker.role === "custodian" && walker.path.length === 0 && walker.state === "repairing");
+  const custodian = state.walkers.find((walker) => walker.role === "custodian" && !walker.assignmentBuildingId && walker.path.length === 0 && walker.state === "repairing");
   if (!custodian) {
     return state;
   }
+
+  const isDevout = walkerHasTrait(custodian, "devout");
 
   const buildings = state.buildings.map((building) => {
     if (Math.abs(building.position.x - custodian.tile.x) + Math.abs(building.position.y - custodian.tile.y) > 2) {
       return building;
     }
+    const baseRepair = 0.12;
+    const devoutBonus = isDevout && RITUAL_BUILDING_IDS.has(building.defId) ? 0.15 : 0;
     return {
       ...building,
-      condition: Math.min(building.maxCondition, building.condition + 0.12)
+      condition: Math.min(building.maxCondition, building.condition + baseRepair * (1 + devoutBonus))
     };
   });
 
@@ -1154,14 +1340,20 @@ function resolveDueConsequences(state: GameState, events: GameEvent[]): GameStat
       resolutionReport: report,
       credibilityDelta: delta
     });
-    nextFactions = {
-      ...nextFactions,
-      [consequence.factionId]: {
+    // F1.4 — Track faction memory on consequence resolution
+    const success = delta > 0;
+    const updatedFaction = updateFactionMemory(
+      {
         ...faction,
         credibility: Math.max(0, Math.min(100, faction.credibility + delta)),
         lastOutcome: report,
         history: [report, ...faction.history].slice(0, 4)
-      }
+      },
+      success
+    );
+    nextFactions = {
+      ...nextFactions,
+      [consequence.factionId]: updatedFaction
     };
     const observerReactions = evaluateResolutionObservers(
       {
@@ -1273,6 +1465,22 @@ function describePriestPoliticsShift(
   return `${dominantBloc?.label ?? "Priestly factions"} take the chamber. ${pressureText} ${politics.currentIssue}`;
 }
 
+function getRelicBonus(state: GameState, effectType: string): number {
+  const claimed = state.excavation?.claimedRelics ?? [];
+  return claimed.reduce((sum, relic) =>
+    relic.effect.type === effectType ? sum + relic.effect.value : sum, 0
+  );
+}
+
+function getSacredSiteBonus(state: GameState, effectType: string): number {
+  const sites = state.excavation?.sacredSites ?? [];
+  return sites
+    .filter((s) => s.active)
+    .reduce((sum, site) =>
+      sum + site.bonuses.reduce((bSum, b) => b.type === effectType ? bSum + b.value : bSum, 0),
+    0);
+}
+
 function advanceExcavations(state: GameState): GameState {
   const excavation = state.excavation;
   if (!excavation) {
@@ -1287,9 +1495,13 @@ function advanceExcavations(state: GameState): GameState {
       continue;
     }
 
-    // Dig rate: base 0.5 per day, +0.3 if priest assigned
-    const hasPriest = site.assignedPriestId !== undefined;
-    const digRate = hasPriest ? 0.8 : 0.5;
+    // Dig rate: base 0.5 per day, +0.3 if priest assigned, plus skill and relic bonuses
+    const assignedPriest = site.assignedPriestId
+      ? state.priests.find((p) => p.id === site.assignedPriestId)
+      : undefined;
+    const priestSkillBonus = assignedPriest ? assignedPriest.skill / 200 : 0;
+    const relicSkillBonus = getRelicBonus(state, "priest_skill") / 100;
+    const digRate = (assignedPriest ? 0.8 : 0.5) + priestSkillBonus + relicSkillBonus;
     const newDepth = Math.min(site.maxDepth, site.depth + digRate);
     const previousWholeDepth = Math.floor(site.depth);
     const currentWholeDepth = Math.floor(newDepth);
@@ -1463,6 +1675,176 @@ function advanceLegendaryAvailability(state: GameState): GameState {
   return nextState;
 }
 
+/** Computes the combined production multiplier from completed tech effects. */
+function getTechProductionMultiplier(state: GameState, buildingDefId: string, recipeId: string): number {
+  if (!state.research?.completedTechIds.length) return 1;
+  let multiplier = 1;
+  for (const techId of state.research.completedTechIds) {
+    const tech = techDefById[techId];
+    if (!tech) continue;
+    for (const effect of tech.effects) {
+      if (effect.kind === "production_bonus" && effect.buildingId === buildingDefId && effect.recipeId === recipeId) {
+        multiplier *= effect.multiplier;
+      }
+    }
+  }
+  return multiplier;
+}
+
+/** Computes the upkeep multiplier from completed tech effects. */
+function getTechUpkeepMultiplier(state: GameState, buildingDefId: string, resourceId: string): number {
+  if (!state.research?.completedTechIds.length) return 1;
+  let multiplier = 1;
+  for (const techId of state.research.completedTechIds) {
+    const tech = techDefById[techId];
+    if (!tech) continue;
+    for (const effect of tech.effects) {
+      if (effect.kind === "upkeep_reduction" && effect.buildingId === buildingDefId && effect.resourceId === resourceId) {
+        multiplier *= effect.multiplier;
+      }
+    }
+  }
+  return multiplier;
+}
+
+/** Computes the construction speed multiplier from completed tech effects. */
+function getTechConstructionSpeedMultiplier(state: GameState): number {
+  if (!state.research?.completedTechIds.length) return 1;
+  let multiplier = 1;
+  for (const techId of state.research.completedTechIds) {
+    const tech = techDefById[techId];
+    if (!tech) continue;
+    for (const effect of tech.effects) {
+      if (effect.kind === "construction_speed") {
+        multiplier *= effect.multiplier;
+      }
+    }
+  }
+  return multiplier;
+}
+
+/** Computes the carrier supply radius bonus from completed tech effects. */
+function getTechCarrierCapacityBonus(state: GameState): number {
+  if (!state.research?.completedTechIds.length) return 0;
+  let bonus = 0;
+  for (const techId of state.research.completedTechIds) {
+    const tech = techDefById[techId];
+    if (!tech) continue;
+    for (const effect of tech.effects) {
+      if (effect.kind === "carrier_capacity") {
+        bonus += effect.bonus;
+      }
+    }
+  }
+  return bonus;
+}
+
+function advanceResearch(state: GameState, events: GameEvent[]): GameState {
+  if (!state.research?.activeTechId) return state;
+
+  const tech = techDefById[state.research.activeTechId];
+  if (!tech) return state;
+
+  const knowledgePerTick = state.resources.knowledge.amount > 0
+    ? Math.min(state.resources.knowledge.amount, 0.01)
+    : 0;
+
+  if (knowledgePerTick <= 0) return state;
+
+  const newProgress = state.research.activeTechProgress + knowledgePerTick;
+  const newKnowledgeAmount = state.resources.knowledge.amount - knowledgePerTick;
+
+  if (newProgress >= tech.knowledgeCost) {
+    events.push({ type: "TechResearched", techId: state.research.activeTechId });
+    return {
+      ...state,
+      resources: {
+        ...state.resources,
+        knowledge: {
+          ...state.resources.knowledge,
+          amount: Math.max(0, newKnowledgeAmount)
+        }
+      },
+      research: {
+        ...state.research,
+        activeTechId: undefined,
+        activeTechProgress: 0,
+        knowledgeAccumulated: state.research.knowledgeAccumulated + tech.knowledgeCost,
+        completedTechIds: [...state.research.completedTechIds, state.research.activeTechId]
+      }
+    };
+  }
+
+  return {
+    ...state,
+    resources: {
+      ...state.resources,
+      knowledge: {
+        ...state.resources.knowledge,
+        amount: Math.max(0, newKnowledgeAmount)
+      }
+    },
+    research: {
+      ...state.research,
+      activeTechProgress: newProgress
+    }
+  };
+}
+
+/** Advance worker experience: +1 per 100 ticks when in "working" state. */
+function advanceWorkerExperience(state: GameState): GameState {
+  let changed = false;
+  const walkers = state.walkers.map((walker) => {
+    if (walker.role === "pilgrim" || walker.role === "priest") return walker;
+    if (walker.state !== "working") return walker;
+    const exp = Math.min(100, (walker.experience ?? 0) + 1);
+    const newLevel = computeSkillLevel(exp);
+    if (exp === (walker.experience ?? 0) && newLevel === (walker.skillLevel ?? 1)) return walker;
+    changed = true;
+    return {
+      ...walker,
+      experience: exp,
+      skillLevel: newLevel,
+    };
+  });
+  return changed ? { ...state, walkers } : state;
+}
+
+/** Daily morale update for workers. */
+export function advanceWorkerMorale(state: GameState): GameState {
+  let changed = false;
+  const walkers = state.walkers.map((walker) => {
+    if (walker.role === "pilgrim" || walker.role === "priest") return walker;
+    const currentMorale = walker.morale ?? 50;
+    let delta = 0;
+
+    const isFed = (walker.hungerTicks ?? 0) === 0;
+    const isHoused = walker.homeBuildingId !== undefined;
+    const isWorking = walker.assignmentBuildingId !== undefined;
+    const isStarving = (walker.hungerTicks ?? 0) >= HUNGER_STARVING_TICKS;
+
+    if (isFed && isHoused && isWorking) {
+      delta += 1; // Fed + housed + working → +1/day (cap 80 enforced below)
+    }
+    if (isStarving) {
+      delta -= 5; // Starving → -5/day
+    }
+
+    if (delta === 0) return walker;
+
+    let newMorale = currentMorale + delta;
+    // Cap at 80 for positive growth, floor at 0
+    newMorale = Math.max(0, Math.min(100, newMorale));
+    // Positive-only growth caps at 80
+    if (delta > 0 && newMorale > 80) newMorale = Math.max(currentMorale, 80);
+
+    if (newMorale === currentMorale) return walker;
+    changed = true;
+    return { ...walker, morale: newMorale };
+  });
+  return changed ? { ...state, walkers } : state;
+}
+
 export function runSimulationTick(
   state: GameState,
   tickCount: number,
@@ -1482,8 +1864,28 @@ export function runSimulationTick(
     nextState = assignWalkerTargets(nextState);
     nextState = moveWalkers(nextState);
     nextState = processCarriers(nextState);
+    const workerPhaseResult = advanceWorkerPhases(nextState, events);
+    nextState = workerPhaseResult.state;
     nextState = processBuildings(nextState, events);
     nextState = processCustodianRepairs(nextState);
+    nextState = processFoodConsumption(nextState, events);
+    // Sprint 5: Resource spoilage
+    nextState = processSpoilage(nextState);
+    // Worker experience gain: +1 experience per 100 ticks when working
+    if (nextState.clock.tick % 100 === 0) {
+      nextState = advanceWorkerExperience(nextState);
+    }
+    nextState = advanceResearch(nextState, events);
+    // Initialize city prosperity if missing
+    if (!nextState.cityProsperity) {
+      nextState = { ...nextState, cityProsperity: DEFAULT_CITY_PROSPERITY };
+    }
+    // Process visitor economy every 10 ticks
+    if (nextState.clock.tick % 10 === 0) {
+      const visitorResult = processVisitorEconomy(nextState);
+      nextState = visitorResult.state;
+      events.push(...visitorResult.events);
+    }
     nextState = spawnPilgrimIfNeeded(nextState);
     nextState = cleanupPilgrims(nextState);
     nextState = {
@@ -1493,13 +1895,16 @@ export function runSimulationTick(
         needs: {
           purification: Math.min(100, nextState.pythia.needs.purification + 0.02),
           rest: Math.min(100, nextState.pythia.needs.rest + (nextState.consultation.mode === "open" ? 0.08 : 0.015)),
-          pilgrimageCooldown: Math.max(0, nextState.pythia.needs.pilgrimageCooldown - 0.01)
+          pilgrimageCooldown: Math.max(0, nextState.pythia.needs.pilgrimageCooldown - 0.01),
+          food: Math.min(100, nextState.pythia.needs.food + 0.018)
         }
       }
     };
   }
 
   if (nextState.clock.day !== previousClock.day) {
+    // Daily morale processing for workers
+    nextState = advanceWorkerMorale(nextState);
     events.push({ type: "DayAdvanced", day: nextState.clock.day });
     const previousPressure = nextState.priestPolitics?.overallPressure ?? 0;
     const previousStatus = nextState.priestPolitics?.status;
@@ -1544,6 +1949,16 @@ export function runSimulationTick(
     nextState = advanceExcavations(nextState);
   }
 
+  if (nextState.clock.day !== previousClock.day) {
+    const depositRegen = regenerateDeposits(nextState);
+    nextState = depositRegen.state;
+    events.push(...depositRegen.events);
+  }
+
+  if (nextState.clock.day !== previousClock.day) {
+    nextState = advanceEventChains(nextState, events);
+  }
+
   if (nextState.clock.day !== previousClock.day && nextState.consultation.mode === "idle") {
     const consultation = maybeCreateConsultation(nextState);
     if (consultation) {
@@ -1566,13 +1981,25 @@ export function runSimulationTick(
       },
       politicalUpdate.factions
     );
+    const hegemonRepDelta = politicalUpdate.reputationDelta ?? 0;
     nextState = {
       ...nextState,
       factions: politicalUpdate.factions,
       philosophers: politicalUpdate.philosophers,
       tradeOffers: politicalUpdate.tradeOffers,
-      campaign: campaignUpdate.campaign,
-      eventFeed: [...campaignUpdate.feedItems, ...politicalUpdate.feedItems, ...nextState.eventFeed].slice(0, 8)
+      ...(politicalUpdate.resources ? { resources: politicalUpdate.resources } : {}),
+      campaign: {
+        ...campaignUpdate.campaign,
+        reputation: {
+          ...campaignUpdate.campaign.reputation,
+          score: Math.max(0, campaignUpdate.campaign.reputation.score + hegemonRepDelta)
+        },
+        worldMap: {
+          ...campaignUpdate.campaign.worldMap,
+          ...(politicalUpdate.links ? { links: politicalUpdate.links } : {})
+        }
+      },
+      eventFeed: [...politicalUpdate.feedItems, ...campaignUpdate.feedItems, ...nextState.eventFeed]
     };
 
     // Advance world history AFTER faction politics processing
@@ -1630,12 +2057,69 @@ export function runSimulationTick(
     // Advance prophecy arcs monthly
     nextState = advanceProphecyArcs(nextState);
 
+    // Resolve follow-up obligations and contradictions monthly
+    nextState = resolveFollowUp(nextState);
+    nextState = resolveContradictions(nextState);
+
+    // Advance prophecy belief strength monthly
+    nextState = advanceBeliefStrength(nextState);
+
+    // Apply interpretation branch effects monthly
+    nextState = applyInterpretationBranchEffects(nextState);
+
     // Advance decline mechanics monthly
     nextState = advanceDecline(nextState);
+
+    // Advance economy systems monthly
+    nextState = updateMarketPrices(nextState);
+    nextState = advancePatronContracts(nextState);
+    nextState = advanceLoanPayments(nextState);
+
+    // Generate monthly trade offers
+    const tradeResult = processTradeOffers(nextState);
+    nextState = tradeResult.state;
+
+    // Advance diplomacy and rival strategies monthly
+    nextState = advanceDiplomacy(nextState);
+    nextState = advanceRivalStrategies(nextState);
+
+    // Advance priest experience and character arcs monthly
+    nextState = advancePriestExperience(nextState);
+    nextState = advanceCharacterArcs(nextState);
+
+    // Advance festivals monthly
+    nextState = advanceFestivals(nextState);
+
+    // Advance city growth monthly
+    nextState = advanceCityGrowth(nextState);
+
+    // Advance achievements and hubris monthly
+    nextState = checkAchievements(nextState);
+    nextState = advanceHubris(nextState);
+
+    // Advance weather at season transitions
+    if (nextState.clock.season !== previousClock.season) {
+      nextState = advanceWeather(nextState);
+    }
+
+    // Final event feed trim for the monthly block
+    if (nextState.eventFeed.length > 12) {
+      nextState = {
+        ...nextState,
+        eventFeed: nextState.eventFeed.slice(0, 12)
+      };
+    }
   }
 
   nextState = resolveDueConsequences(nextState, events);
-  nextState.advisorMessages = generateAdvisorMessages(nextState);
+  const rawAdvisorMessages = generateAdvisorMessages(nextState);
+  const advisorResult = applyAdvisorPersonality(nextState, rawAdvisorMessages);
+  nextState.advisorMessages = advisorResult.messages;
+  nextState = {
+    ...nextState,
+    advisorHistory: advisorResult.advisorHistory,
+    advisorAccuracy: advisorResult.advisorAccuracy
+  };
 
   if (nextState.clock.day > nextState.lastAutosaveDay && nextState.clock.day % 30 === 0) {
     events.push({ type: "AutosaveTriggered", day: nextState.clock.day });
@@ -1653,15 +2137,20 @@ export function runSimulationTick(
 
 export function createBuildingAt(defId: BuildingInstance["defId"], tile: { x: number; y: number }, id: string): BuildingInstance {
   const def = buildingDefs[defId];
+  const work = def.constructionWork ?? 0;
+  const underConstruction = work > 0;
   return {
     id,
     defId,
     position: tile,
-    condition: def.maxCondition,
+    condition: underConstruction ? 0 : def.maxCondition,
     maxCondition: def.maxCondition,
     requiresPriest: def.requiresPriest,
     assignedPriestIds: [],
-    storedResources: { ...def.startingResources },
-    connectedToRoad: defId === "sacred_way"
+    assignedWorkerIds: [],
+    // Don't grant starting resources until construction is complete
+    storedResources: underConstruction ? {} : { ...def.startingResources },
+    connectedToRoad: defId === "sacred_way",
+    ...(underConstruction ? { constructionProgress: 0, constructionWork: work } : {})
   };
 }

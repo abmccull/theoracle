@@ -1,13 +1,23 @@
 import {
+  DEFAULT_DIFFICULTY_ID,
   DEFAULT_ORIGIN_ID,
+  DEFAULT_PYTHIA_ARCHETYPE_ID,
+  difficultyDefById,
+  difficultyDefs,
   factionDefs,
   originDefById,
   originDefs,
+  pythiaArchetypeDefById,
+  pythiaArchetypeDefs,
+  scenarioDefs,
+  type DifficultyId,
   type FactionAgenda,
   type FactionId,
   type FactionProfile,
   type OriginDef,
-  type OriginId
+  type OriginId,
+  type PythiaArchetypeId,
+  type ScenarioId
 } from "@the-oracle/content";
 
 type MetricBand = {
@@ -136,6 +146,11 @@ export type RunSetupWorldPreviewData = {
   pressures?: WorldPressureSummaryPreview[];
   map?: WorldMapPreviewData;
   note?: string;
+  selectedScenario?: RunSetupScenarioOptionData;
+  selectedDifficulty?: RunSetupDifficultyOptionData;
+  selectedPythia?: RunSetupPythiaOptionData;
+  startingCities?: RunSetupCityOptionData[];
+  selectedStartingCityId?: string;
 };
 
 export type GeneratedFactionSetup = {
@@ -200,6 +215,44 @@ export type WorldGenerationState = {
 export type NewRunOptions = {
   seed?: number | string;
   originId?: OriginId;
+  scenarioId?: ScenarioId;
+  difficultyId?: DifficultyId;
+  pythiaArchetypeId?: PythiaArchetypeId;
+  startingRegionId?: string;
+};
+
+export type RunSetupScenarioOptionData = {
+  id: ScenarioId;
+  label: string;
+  summary: string;
+  difficulty?: number;
+  recommendedStartingTier?: string;
+};
+
+export type RunSetupDifficultyOptionData = {
+  id: DifficultyId;
+  label: string;
+  title?: string;
+  summary: string;
+  tone: WorldTone;
+};
+
+export type RunSetupPythiaOptionData = {
+  id: PythiaArchetypeId;
+  label: string;
+  title?: string;
+  summary: string;
+  traits: string[];
+  statline: string;
+};
+
+export type RunSetupCityOptionData = {
+  id: string;
+  label: string;
+  summary: string;
+  controllingFactionLabel?: string;
+  pressure?: string;
+  tags?: string[];
 };
 
 const PROFILE_ORDER: FactionProfile[] = ["martial", "mercantile", "devout", "scheming"];
@@ -411,8 +464,48 @@ export function normalizeOriginId(originId?: string): OriginId {
   return DEFAULT_ORIGIN_ID;
 }
 
+export function normalizeDifficultyId(difficultyId?: string): DifficultyId {
+  if (difficultyId && difficultyId in difficultyDefById) {
+    return difficultyId as DifficultyId;
+  }
+  return DEFAULT_DIFFICULTY_ID;
+}
+
+export function normalizePythiaArchetypeId(pythiaArchetypeId?: string): PythiaArchetypeId {
+  if (pythiaArchetypeId && pythiaArchetypeId in pythiaArchetypeDefById) {
+    return pythiaArchetypeId as PythiaArchetypeId;
+  }
+  return DEFAULT_PYTHIA_ARCHETYPE_ID;
+}
+
+export function normalizeScenarioId(scenarioId?: string): ScenarioId {
+  if (scenarioDefs.some((scenario) => scenario.id === scenarioId)) {
+    return scenarioId as ScenarioId;
+  }
+  return "rising-oracle";
+}
+
+export function normalizeStartingRegionId(startingRegionId?: string): string {
+  if (startingRegionId && DEFAULT_WORLD_REGION_LAYOUTS.some((region) => region.id === startingRegionId)) {
+    return startingRegionId;
+  }
+  return "delphi";
+}
+
 function originFor(originId?: string): OriginDef {
   return originDefById[normalizeOriginId(originId)];
+}
+
+function difficultyFor(difficultyId?: string) {
+  return difficultyDefById[normalizeDifficultyId(difficultyId)];
+}
+
+function pythiaArchetypeFor(pythiaArchetypeId?: string) {
+  return pythiaArchetypeDefById[normalizePythiaArchetypeId(pythiaArchetypeId)];
+}
+
+function scenarioFor(scenarioId?: string) {
+  return scenarioDefs.find((scenario) => scenario.id === normalizeScenarioId(scenarioId)) ?? scenarioDefs[0]!;
 }
 
 function bandIndex(seed: number, salt: number, bias: number, length: number): number {
@@ -592,42 +685,46 @@ function buildRegionPressures(
   layout: WorldRegionLayout,
   seed: number,
   origin: OriginDef,
+  difficultyId: DifficultyId,
   pressureBase: number,
   controllingFactionLabel?: string
 ): WorldPressureSummaryPreview[] {
+  const difficulty = difficultyFor(difficultyId);
   const portBias = layout.tags.includes("port") ? 8 : 0;
   const sanctuaryBias = layout.tags.includes("sanctuary") ? 6 : 0;
   const unrestBias = (origin.worldBias?.unrest ?? 0) * 7;
   const tradeBias = (origin.worldBias?.trade ?? 0) * 6;
   const warBias = (origin.worldBias?.war ?? 0) * 7;
   const doctrineBias = (origin.worldBias?.intrigue ?? 0) * 6;
+  const difficultyPressureBias = (difficulty.worldBias?.pressure ?? 0) * 8;
+  const difficultyUnrestBias = (difficulty.worldBias?.unrest ?? 0) * 6;
 
   const pressures: WorldPressureSummaryPreview[] = [
     {
       id: `${layout.id}-pressure-pilgrim`,
       label: "Pilgrim traffic",
-      value: `${clamp(Math.round(32 + pressureBase * 0.35 + sanctuaryBias - warBias), 10, 98)}`,
+      value: `${clamp(Math.round(32 + pressureBase * 0.35 + sanctuaryBias - warBias + difficultyPressureBias * 0.4), 10, 98)}`,
       detail: "shifting demand",
       tone: "watchful" as const,
-      severity: severityFromMeter(clamp(Math.round(32 + pressureBase * 0.35 + sanctuaryBias - warBias), 0, 100)),
+      severity: severityFromMeter(clamp(Math.round(32 + pressureBase * 0.35 + sanctuaryBias - warBias + difficultyPressureBias * 0.4), 0, 100)),
       nodeId: layout.id
     },
     {
       id: `${layout.id}-pressure-trade`,
       label: "Trade route strain",
-      value: `${clamp(Math.round(28 + pressureBase * 0.4 + portBias - tradeBias), 10, 98)}`,
+      value: `${clamp(Math.round(28 + pressureBase * 0.4 + portBias - tradeBias + difficultyPressureBias * 0.55), 10, 98)}`,
       detail: controllingFactionLabel ? `${controllingFactionLabel} route leverage` : "regional markets",
       tone: "rising" as const,
-      severity: severityFromMeter(clamp(Math.round(28 + pressureBase * 0.4 + portBias - tradeBias), 0, 100)),
+      severity: severityFromMeter(clamp(Math.round(28 + pressureBase * 0.4 + portBias - tradeBias + difficultyPressureBias * 0.55), 0, 100)),
       nodeId: layout.id
     },
     {
       id: `${layout.id}-pressure-doctrine`,
       label: "Doctrinal agitation",
-      value: `${clamp(Math.round(24 + pressureBase * 0.3 + doctrineBias + unrestBias), 10, 98)}`,
+      value: `${clamp(Math.round(24 + pressureBase * 0.3 + doctrineBias + unrestBias + difficultyUnrestBias), 10, 98)}`,
       detail: layout.tags.includes("city") ? "schools and councils" : "shrines and rumor",
       tone: "critical" as const,
-      severity: severityFromMeter(clamp(Math.round(24 + pressureBase * 0.3 + doctrineBias + unrestBias), 0, 100)),
+      severity: severityFromMeter(clamp(Math.round(24 + pressureBase * 0.3 + doctrineBias + unrestBias + difficultyUnrestBias), 0, 100)),
       nodeId: layout.id
     }
   ];
@@ -655,12 +752,14 @@ function buildRegionHistory(layout: WorldRegionLayout, seed: number, philosophy:
 function buildRegions(
   seed: number,
   origin: OriginDef,
+  difficultyId: DifficultyId,
   climateBand: MetricBand,
   divineBand: MetricBand,
   densityBand: MetricBand,
   factionSetups: GeneratedFactionSetup[],
   factionMix: WorldFactionSharePreview[]
 ): GeneratedRegionState[] {
+  const difficulty = difficultyFor(difficultyId);
   const rankedFactions = [...factionSetups].sort((left, right) => right.influence - left.influence || left.id.localeCompare(right.id));
 
   return DEFAULT_WORLD_REGION_LAYOUTS.map((layout, index) => {
@@ -670,12 +769,24 @@ function buildRegions(
     const fallbackFaction = rankedFactions[index % rankedFactions.length];
     const controller = preferredFaction ?? fallbackFaction;
     const pressure = clamp(
-      Math.round(22 + unit(seed, 301 + index * 29) * 52 + (origin.worldBias?.pressure ?? 0) * 8 + (origin.worldBias?.war ?? 0) * 4),
+      Math.round(
+        22
+        + unit(seed, 301 + index * 29) * 52
+        + (origin.worldBias?.pressure ?? 0) * 8
+        + (origin.worldBias?.war ?? 0) * 4
+        + (difficulty.worldBias?.pressure ?? 0) * 9
+      ),
       8,
       96
     );
     const unrest = clamp(
-      Math.round(18 + unit(seed, 341 + index * 31) * 44 + (origin.worldBias?.unrest ?? 0) * 9 + (controller?.agenda === "war" ? 8 : 0)),
+      Math.round(
+        18
+        + unit(seed, 341 + index * 31) * 44
+        + (origin.worldBias?.unrest ?? 0) * 9
+        + (difficulty.worldBias?.unrest ?? 0) * 8
+        + (controller?.agenda === "war" ? 8 : 0)
+      ),
       6,
       98
     );
@@ -688,7 +799,14 @@ function buildRegions(
       }))
       .sort((left, right) => Number((right.value ?? "0").replace("%", "")) - Number((left.value ?? "0").replace("%", "")))
       .slice(0, 3);
-    const pressures = buildRegionPressures(layout, seed + index * 101, origin, pressure, controller ? titleCase(controller.id) : undefined);
+    const pressures = buildRegionPressures(
+      layout,
+      seed + index * 101,
+      origin,
+      difficulty.id,
+      pressure,
+      controller ? titleCase(controller.id) : undefined
+    );
 
     return {
       id: layout.id,
@@ -764,21 +882,50 @@ function buildGlobalPressures(
 export function buildWorldGeneration(options?: NewRunOptions): WorldGenerationState {
   const { seed, seedText } = normalizeSeedInput(options?.seed);
   const origin = originFor(options?.originId);
-  const climateBand = CLIMATE_BANDS[bandIndex(seed, 11, origin.worldBias?.climate ?? 0, CLIMATE_BANDS.length)] ?? CLIMATE_BANDS[2];
-  const economicBand = ECONOMIC_BANDS[bandIndex(seed, 23, origin.worldBias?.economy ?? 0, ECONOMIC_BANDS.length)] ?? ECONOMIC_BANDS[2];
-  const divineBand = DIVINE_MOOD_BANDS[bandIndex(seed, 37, origin.worldBias?.divineMood ?? 0, DIVINE_MOOD_BANDS.length)] ?? DIVINE_MOOD_BANDS[2];
-  const densityBand = ORACLE_DENSITY_BANDS[bandIndex(seed, 43, origin.worldBias?.oracleDensity ?? 0, ORACLE_DENSITY_BANDS.length)] ?? ORACLE_DENSITY_BANDS[2];
+  const difficulty = difficultyFor(options?.difficultyId);
+  const climateBand = CLIMATE_BANDS[
+    bandIndex(
+      seed,
+      11,
+      (origin.worldBias?.climate ?? 0) + (difficulty.worldBias?.climate ?? 0),
+      CLIMATE_BANDS.length
+    )
+  ] ?? CLIMATE_BANDS[2];
+  const economicBand = ECONOMIC_BANDS[
+    bandIndex(
+      seed,
+      23,
+      (origin.worldBias?.economy ?? 0) + (difficulty.worldBias?.economy ?? 0),
+      ECONOMIC_BANDS.length
+    )
+  ] ?? ECONOMIC_BANDS[2];
+  const divineBand = DIVINE_MOOD_BANDS[
+    bandIndex(
+      seed,
+      37,
+      (origin.worldBias?.divineMood ?? 0) + (difficulty.worldBias?.divineMood ?? 0),
+      DIVINE_MOOD_BANDS.length
+    )
+  ] ?? DIVINE_MOOD_BANDS[2];
+  const densityBand = ORACLE_DENSITY_BANDS[
+    bandIndex(
+      seed,
+      43,
+      (origin.worldBias?.oracleDensity ?? 0) + (difficulty.worldBias?.oracleDensity ?? 0),
+      ORACLE_DENSITY_BANDS.length
+    )
+  ] ?? ORACLE_DENSITY_BANDS[2];
   const weights = profileWeightMap(seed, origin);
   const factionMix = factionMixFromWeights(weights);
   const factions = buildFactionSetups(seed, origin, weights, economicBand, divineBand);
-  const regions = buildRegions(seed, origin, climateBand, divineBand, densityBand, factions, factionMix);
+  const regions = buildRegions(seed, origin, difficulty.id, climateBand, divineBand, densityBand, factions, factionMix);
   const history = buildGlobalHistory(seed, origin, regions);
   const pressures = buildGlobalPressures(seed, origin, economicBand, divineBand, densityBand, regions);
   const cityStateCount = integer(seed, 59, 7, 14) + Math.max(0, origin.worldBias?.trade ?? 0);
   const politicalClimate = buildPoliticalClimate(origin, weights, divineBand, economicBand);
   const summary = `${origin.title ?? origin.label} opens in a ${economicBand.label.toLowerCase()} economy with ${divineBand.label.toLowerCase()} divine weather, ${densityBand.label.toLowerCase()} rival oracles, and ${politicalClimate.toLowerCase()}`;
   const scoreModifier = origin.scoreModifier ?? 0;
-  const note = `Seed ${seedText} · ${cityStateCount} notable city-states in play · score modifier ${scoreModifier >= 0 ? "+" : ""}${scoreModifier}.`;
+  const note = `Seed ${seedText} · ${cityStateCount} notable city-states in play · ${difficulty.label} difficulty · score modifier ${scoreModifier >= 0 ? "+" : ""}${scoreModifier}.`;
 
   return {
     seed,
@@ -816,10 +963,16 @@ export function normalizeWorldGenerationState(value?: Partial<WorldGenerationSta
 
 export function buildRunSetupPreview(options?: NewRunOptions): RunSetupWorldPreviewData {
   const world = buildWorldGeneration(options);
-  const selectedRegion = [...world.regions].sort((left, right) => right.pressure - left.pressure || left.id.localeCompare(right.id))[0] ?? world.regions[0];
+  const selectedRegionId = normalizeStartingRegionId(options?.startingRegionId);
+  const selectedRegion = world.regions.find((region) => region.id === selectedRegionId)
+    ?? [...world.regions].sort((left, right) => right.pressure - left.pressure || left.id.localeCompare(right.id))[0]
+    ?? world.regions[0];
+  const scenario = scenarioFor(options?.scenarioId);
+  const difficulty = difficultyFor(options?.difficultyId);
+  const pythia = pythiaArchetypeFor(options?.pythiaArchetypeId);
 
   return {
-    title: `${world.originTitle} · Seed ${world.seedText}`,
+    title: `${scenario.label} · ${world.originTitle} · Seed ${world.seedText}`,
     summary: world.summary,
     climate: world.climate,
     divineMood: world.divineMood,
@@ -864,14 +1017,58 @@ export function buildRunSetupPreview(options?: NewRunOptions): RunSetupWorldPrev
         tone: "watchful"
       }))
     },
-    note: world.note
+    note: `${world.note} ${pythia.label} enters Delphi under the ${scenario.label} arc, opening from ${selectedRegion?.label ?? "Delphi"}.`,
+    selectedScenario: {
+      id: scenario.id,
+      label: scenario.label,
+      summary: scenario.summary,
+      difficulty: scenario.difficulty,
+      recommendedStartingTier: scenario.recommendedStartingTier
+    },
+    selectedDifficulty: {
+      id: difficulty.id,
+      label: difficulty.label,
+      title: difficulty.title,
+      summary: difficulty.summary,
+      tone:
+        difficulty.id === "pilgrim"
+          ? "steady"
+          : difficulty.id === "oracle"
+            ? "watchful"
+            : difficulty.id === "prophet"
+              ? "rising"
+              : "critical"
+    },
+    selectedPythia: {
+      id: pythia.id,
+      label: pythia.label,
+      title: pythia.title,
+      summary: pythia.summary,
+      traits: [...(pythia.startingTraits ?? [])],
+      statline: [
+        pythia.pythiaModifiers?.attunement ? `Attunement ${pythia.pythiaModifiers.attunement >= 0 ? "+" : ""}${pythia.pythiaModifiers.attunement}` : null,
+        pythia.pythiaModifiers?.mentalClarity ? `Clarity ${pythia.pythiaModifiers.mentalClarity >= 0 ? "+" : ""}${pythia.pythiaModifiers.mentalClarity}` : null,
+        pythia.pythiaModifiers?.tranceDepth ? `Trance ${pythia.pythiaModifiers.tranceDepth >= 0 ? "+" : ""}${pythia.pythiaModifiers.tranceDepth}` : null,
+        pythia.pythiaModifiers?.physicalHealth ? `Health ${pythia.pythiaModifiers.physicalHealth >= 0 ? "+" : ""}${pythia.pythiaModifiers.physicalHealth}` : null
+      ].filter((entry): entry is string => Boolean(entry)).join(" · ")
+    },
+    startingCities: world.regions.map((region) => ({
+      id: region.id,
+      label: region.label,
+      summary: region.summary,
+      controllingFactionLabel: region.controllingFactionId ? titleCase(region.controllingFactionId) : "No stable hegemon",
+      pressure: `${region.pressure}`,
+      tags: [...region.tags]
+    })),
+    selectedStartingCityId: selectedRegion?.id ?? selectedRegionId
   };
 }
 
-export function buildRunSetupOriginOptions(seed?: number | string): RunSetupOriginOptionData[] {
+export function buildRunSetupOriginOptions(options?: number | string | NewRunOptions): RunSetupOriginOptionData[] {
+  const resolvedOptions = typeof options === "object" && options !== null ? options : { seed: options };
   return originDefs.map((origin) => {
     const preview = buildRunSetupPreview({
-      seed,
+      ...resolvedOptions,
       originId: origin.id
     });
 
@@ -888,4 +1085,47 @@ export function buildRunSetupOriginOptions(seed?: number | string): RunSetupOrig
       tags: [...(origin.challengeTags ?? [])]
     };
   });
+}
+
+export function buildRunSetupScenarioOptions(): RunSetupScenarioOptionData[] {
+  return scenarioDefs.map((scenario) => ({
+    id: scenario.id,
+    label: scenario.label,
+    summary: scenario.summary,
+    difficulty: scenario.difficulty,
+    recommendedStartingTier: scenario.recommendedStartingTier
+  }));
+}
+
+export function buildRunSetupDifficultyOptions(): RunSetupDifficultyOptionData[] {
+  return difficultyDefs.map((difficulty) => ({
+    id: difficulty.id,
+    label: difficulty.label,
+    title: difficulty.title,
+    summary: difficulty.summary,
+    tone:
+      difficulty.id === "pilgrim"
+        ? "steady"
+        : difficulty.id === "oracle"
+          ? "watchful"
+          : difficulty.id === "prophet"
+            ? "rising"
+            : "critical"
+  }));
+}
+
+export function buildRunSetupPythiaOptions(): RunSetupPythiaOptionData[] {
+  return pythiaArchetypeDefs.map((pythia) => ({
+    id: pythia.id,
+    label: pythia.label,
+    title: pythia.title,
+    summary: pythia.summary,
+    traits: [...(pythia.startingTraits ?? [])],
+    statline: [
+      pythia.pythiaModifiers?.attunement ? `Attunement ${pythia.pythiaModifiers.attunement >= 0 ? "+" : ""}${pythia.pythiaModifiers.attunement}` : null,
+      pythia.pythiaModifiers?.mentalClarity ? `Clarity ${pythia.pythiaModifiers.mentalClarity >= 0 ? "+" : ""}${pythia.pythiaModifiers.mentalClarity}` : null,
+      pythia.pythiaModifiers?.tranceDepth ? `Trance ${pythia.pythiaModifiers.tranceDepth >= 0 ? "+" : ""}${pythia.pythiaModifiers.tranceDepth}` : null,
+      pythia.pythiaModifiers?.physicalHealth ? `Health ${pythia.pythiaModifiers.physicalHealth >= 0 ? "+" : ""}${pythia.pythiaModifiers.physicalHealth}` : null
+    ].filter((entry): entry is string => Boolean(entry)).join(" · ")
+  }));
 }

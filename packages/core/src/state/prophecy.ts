@@ -22,6 +22,9 @@ export type ProphecyArc = {
   milestones: ProphecyArcMilestone[];
   interpretationBranches: ProphecyInterpretationBranch[];
   followUpObligations: ProphecyFollowUp[];
+  chainLength?: number;
+  isGrandProphecy?: boolean;
+  grandProphecyBonus?: number;
 };
 
 export type ProphecyArcMilestone = {

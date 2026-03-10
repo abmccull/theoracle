@@ -44,7 +44,8 @@ describe("Prophecy systems", () => {
       needs: {
         purification: 28,
         rest: 24,
-        pilgrimageCooldown: 0
+        pilgrimageCooldown: 0,
+        food: 20
       },
       traits: ["visionary", "calculating", "diplomatic"]
     });
@@ -55,7 +56,8 @@ describe("Prophecy systems", () => {
       needs: {
         purification: 74,
         rest: 71,
-        pilgrimageCooldown: 0
+        pilgrimageCooldown: 0,
+        food: 20
       },
       traits: ["fragile"]
     });

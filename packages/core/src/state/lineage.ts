@@ -9,7 +9,13 @@ export type BurdenId =
   | "fragile_pythia"
   | "scarce_resources"
   | "aggressive_rivals"
-  | "short_seasons";
+  | "short_seasons"
+  | "hostile_philosophers"
+  | "unstable_weather"
+  | "aggressive_patrons"
+  | "expensive_construction"
+  | "weak_spring"
+  | "rival_oracle_surge";
 
 export type BurdenDef = {
   id: BurdenId;
@@ -54,6 +60,42 @@ export const burdenDefs: BurdenDef[] = [
     name: "Short Seasons",
     description: "Decline thresholds are tighter. The oracle must prove itself faster.",
     scoreMultiplier: 1.4
+  },
+  {
+    id: "hostile_philosophers",
+    name: "Hostile Philosophers",
+    description: "Philosopher threats start 20% higher across all factions.",
+    scoreMultiplier: 1.2
+  },
+  {
+    id: "unstable_weather",
+    name: "Unstable Weather",
+    description: "Weather events are more severe and more frequent.",
+    scoreMultiplier: 1.25
+  },
+  {
+    id: "aggressive_patrons",
+    name: "Aggressive Patrons",
+    description: "Patron demands are harder to satisfy.",
+    scoreMultiplier: 1.2
+  },
+  {
+    id: "expensive_construction",
+    name: "Expensive Construction",
+    description: "Building costs increase by 30%.",
+    scoreMultiplier: 1.15
+  },
+  {
+    id: "weak_spring",
+    name: "Weak Spring",
+    description: "Sacred water production is reduced by 25%.",
+    scoreMultiplier: 1.2
+  },
+  {
+    id: "rival_oracle_surge",
+    name: "Rival Oracle Surge",
+    description: "Rival oracle pressure starts at 40 instead of 20.",
+    scoreMultiplier: 1.3
   }
 ];
 
@@ -135,7 +177,13 @@ const BURDEN_UNLOCK_THRESHOLDS: Array<{ threshold: number; burdenId: BurdenId }>
   { threshold: 450, burdenId: "fragile_pythia" },
   { threshold: 550, burdenId: "no_trade" },
   { threshold: 700, burdenId: "aggressive_rivals" },
-  { threshold: 850, burdenId: "short_seasons" }
+  { threshold: 850, burdenId: "short_seasons" },
+  { threshold: 950, burdenId: "hostile_philosophers" },
+  { threshold: 1050, burdenId: "unstable_weather" },
+  { threshold: 1150, burdenId: "aggressive_patrons" },
+  { threshold: 1250, burdenId: "expensive_construction" },
+  { threshold: 1350, burdenId: "weak_spring" },
+  { threshold: 1500, burdenId: "rival_oracle_surge" }
 ];
 
 // --- Carryover bonus computation ---

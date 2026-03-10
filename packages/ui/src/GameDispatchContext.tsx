@@ -1,5 +1,5 @@
 import { createContext, useContext } from "react";
-import type { BurdenId, EspionageAgentCover, EspionageOperationKind, FactionId, LegendaryConsultationId, OriginId, PlacementTool } from "@the-oracle/core";
+import type { BurdenId, EspionageAgentCover, EspionageOperationKind, FactionId, LegendaryConsultationId, OriginId, PlacementTool, ResourceId } from "@the-oracle/core";
 
 export type GameDispatchActions = {
   onSetTool: (tool: PlacementTool) => void;
@@ -28,6 +28,11 @@ export type GameDispatchActions = {
   onAdvanceLegendaryStage: (consultationId: LegendaryConsultationId) => void;
   onStartNewLineageRun: (originId: OriginId, seedText: string, burdens: BurdenId[], endlessMode: boolean) => void;
   onRecordLineageRun: () => void;
+  onSelectResearch: (techId: string) => void;
+  onSellResource: (resourceId: ResourceId, amount: number, targetFactionId: string) => void;
+  onDemolishBuilding: (buildingId: string) => void;
+  onInterrogateAgent: (agentId: string) => void;
+  onRansomAgent: (agentId: string) => void;
 };
 
 export const GameDispatchContext =

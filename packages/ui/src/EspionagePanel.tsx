@@ -21,7 +21,11 @@ const COVER_OPTIONS: { cover: EspionageAgentCover; label: string }[] = [
 
 export function EspionagePanel({ state }: { state: GameState }) {
   const overview = selectEspionageOverview(state);
-  const { onLaunchEspionageOperation, onRecruitAgent } = useGameDispatch();
+  const dispatch = useGameDispatch();
+  const { onLaunchEspionageOperation, onRecruitAgent } = dispatch;
+  // These dispatch actions will be wired later — access via bracket notation to avoid type errors
+  const onInterrogateAgent = (dispatch as Record<string, unknown>)["onInterrogateAgent"] as ((agentId: string) => void) | undefined;
+  const onRansomAgent = (dispatch as Record<string, unknown>)["onRansomAgent"] as ((agentId: string) => void) | undefined;
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [selectedOpKind, setSelectedOpKind] = useState<EspionageOperationKind>("intercept_prophecy");
   const [recruitCover, setRecruitCover] = useState<EspionageAgentCover>("merchant");
@@ -51,22 +55,24 @@ export function EspionagePanel({ state }: { state: GameState }) {
             <strong>{overview.agents.filter((a) => !a.compromised).length}</strong>
           </div>
         </div>
+        <div className="text-xs text-dim" style={{ marginTop: 4 }}>
+          Monthly upkeep: {5 + overview.agents.filter(a => !a.compromised).length * 5}g
+        </div>
       </div>
 
       <div className="sidebar-block">
         <div className="section-title">Agent Roster</div>
         {overview.agents.length === 0 ? (
-          <div className="text-sm" style={{ color: "var(--text-dim)" }}>No agents recruited yet.</div>
+          <div className="text-sm text-dim">No agents recruited yet.</div>
         ) : null}
         {overview.agents.map((agent) => (
           <div
             key={agent.id}
-            className={`priest-row ${agent.compromised ? "compromised" : ""}`}
-            style={{ opacity: agent.compromised ? 0.6 : 1 }}
+            className={`priest-row ${agent.compromised ? "compromised opacity-60" : ""}`}
           >
             <div className="priest-row-header">
               <span className="priest-row-name">{agent.name}</span>
-              <span className="text-xs" style={{ color: "var(--text-dim)" }}>
+              <span className="text-xs text-dim">
                 {agent.cover} | {agent.targetFactionName}
               </span>
             </div>
@@ -74,12 +80,19 @@ export function EspionagePanel({ state }: { state: GameState }) {
               Skill {agent.skill} | Loyalty {agent.loyalty}
               {agent.compromised ? " | COMPROMISED" : ""}
             </div>
+            {(() => {
+              const rawAgent = state.espionage?.agents.find(a => a.id === agent.id);
+              return rawAgent?.trait ? (
+                <div className="text-xs text-dim">
+                  Traits: {rawAgent.trait.replace(/_/g, ' ')}
+                </div>
+              ) : null;
+            })()}
             {!agent.compromised ? (
               <button
-                className="oracle-button text-xs"
+                className="oracle-button text-xs mt-1"
                 onClick={() => setSelectedAgentId(agent.id === selectedAgentId ? null : agent.id)}
                 type="button"
-                style={{ marginTop: "4px" }}
               >
                 {selectedAgentId === agent.id ? "Deselect" : "Select for Op"}
               </button>
@@ -88,15 +101,39 @@ export function EspionagePanel({ state }: { state: GameState }) {
         ))}
       </div>
 
+      {(state.espionage?.agents.filter(a => a.status === "captured").length ?? 0) > 0 ? (
+        <div className="sidebar-block">
+          <div className="section-title">Captured Agents</div>
+          {state.espionage!.agents.filter(a => a.status === "captured").map(agent => (
+            <div key={agent.id} className="priest-row">
+              <div className="priest-row-header">
+                <span className="priest-row-name">{agent.name}</span>
+                <span className="text-xs text-red">CAPTURED</span>
+              </div>
+              <div className="priest-row-details">
+                {agent.interrogationProgress !== undefined ? `Interrogation ${agent.interrogationProgress}%` : 'Awaiting orders'}
+              </div>
+              <div className="flex-row-gap-2" style={{ marginTop: 4 }}>
+                <button className="oracle-button text-xs" onClick={() => onInterrogateAgent?.(agent.id)} type="button">
+                  Interrogate
+                </button>
+                <button className="oracle-button text-xs" onClick={() => onRansomAgent?.(agent.id)} type="button">
+                  Ransom ({Math.ceil(10 + (agent.experience ?? 0) * 0.5)}g)
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
       {selectedAgentId ? (
         <div className="sidebar-block">
           <div className="section-title">Launch Operation</div>
-          <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+          <div className="flex-col-gap-2">
             <select
-              className="text-sm"
+              className="text-sm select-pad"
               value={selectedOpKind}
               onChange={(e) => setSelectedOpKind(e.target.value as EspionageOperationKind)}
-              style={{ padding: "4px" }}
             >
               {OPERATION_KINDS.map((op) => (
                 <option key={op.kind} value={op.kind}>{op.label}</option>
@@ -116,7 +153,7 @@ export function EspionagePanel({ state }: { state: GameState }) {
             <div key={op.id} className="priest-row">
               <div className="priest-row-header">
                 <span className="priest-row-name">{op.kind.replace(/_/g, " ")}</span>
-                <span className="text-xs" style={{ color: "var(--text-dim)" }}>{op.agentName}</span>
+                <span className="text-xs text-dim">{op.agentName}</span>
               </div>
               <div className="priest-row-details">
                 Progress {op.progress}% | {op.daysRemaining} days remaining
@@ -128,22 +165,20 @@ export function EspionagePanel({ state }: { state: GameState }) {
 
       <div className="sidebar-block">
         <div className="section-title">Recruit Agent</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+        <div className="flex-col-gap-2">
           <select
-            className="text-sm"
+            className="text-sm select-pad"
             value={recruitCover}
             onChange={(e) => setRecruitCover(e.target.value as EspionageAgentCover)}
-            style={{ padding: "4px" }}
           >
             {COVER_OPTIONS.map((opt) => (
               <option key={opt.cover} value={opt.cover}>{opt.label}</option>
             ))}
           </select>
           <select
-            className="text-sm"
+            className="text-sm select-pad"
             value={recruitFaction}
             onChange={(e) => setRecruitFaction(e.target.value as FactionId)}
-            style={{ padding: "4px" }}
           >
             {factionIds.map((id) => (
               <option key={id} value={id}>{state.factions[id]?.name ?? id}</option>
@@ -154,7 +189,7 @@ export function EspionagePanel({ state }: { state: GameState }) {
             onClick={() => onRecruitAgent(recruitCover, recruitFaction)}
             type="button"
           >
-            Recruit (25 gold)
+            Recruit (~17g)
           </button>
         </div>
       </div>
@@ -164,7 +199,7 @@ export function EspionagePanel({ state }: { state: GameState }) {
           <div className="section-title">Counter-Intelligence</div>
           {overview.recentCounterIntel.map((event) => (
             <div key={event.id} className="priest-row">
-              <div className="priest-row-details" style={{ color: "var(--red, #c44)" }}>
+              <div className="priest-row-details text-red">
                 Day {event.day}: {event.description}
               </div>
             </div>

@@ -61,7 +61,7 @@ export function HelpOverlay({ onClose }: HelpOverlayProps) {
             </div>
           ))}
         </div>
-        <button className="oracle-button" onClick={onClose} type="button" style={{ marginTop: 12 }}>
+        <button className="oracle-button mt-3" onClick={onClose} type="button">
           Close
         </button>
       </div>

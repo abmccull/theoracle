@@ -63,6 +63,7 @@ export function SacredRecordPanel({ state }: SacredRecordPanelProps) {
             </button>
           ))}
         </div>
+        <label htmlFor="sacred-record-search" className="sr-only">Search prophecies</label>
         <input
           className="record-search-input"
           type="text"
@@ -73,23 +74,31 @@ export function SacredRecordPanel({ state }: SacredRecordPanelProps) {
         />
       </div>
 
-      <div className="sidebar-block record-list">
-        {filteredEntries.map((entry, index) => (
-          <button
-            key={entry.id}
-            className={`record-list-row ${selected?.id === entry.id ? "active" : ""}`}
-            id={`sacred-record-entry-${index}`}
-            onClick={() => setSelectedId(entry.id)}
-            type="button"
-          >
-            <div className="record-list-row-top">
-              <strong>{entry.factionName}</strong>
-              <span className={`record-status-chip ${entry.status}`}>{entry.status}</span>
-            </div>
-            <span>Day {entry.dayIssued} · {entry.depthBand} depth</span>
-            <span>{entry.text}</span>
-          </button>
-        ))}
+      <div className="sidebar-block record-list" role="listbox" aria-label="Prophecy list">
+        {filteredEntries.map((entry, index) => {
+          const excerpt = entry.text.length > 60 ? `${entry.text.slice(0, 57)}...` : entry.text;
+          return (
+            <button
+              key={entry.id}
+              className={`record-list-row ${selected?.id === entry.id ? "active" : ""}`}
+              id={`sacred-record-entry-${index}`}
+              onClick={() => setSelectedId(entry.id)}
+              type="button"
+              role="option"
+              aria-selected={selected?.id === entry.id}
+            >
+              <div className="record-list-row-top">
+                <strong>{entry.factionName}</strong>
+                <span className={`record-status-chip ${entry.status}`}>{entry.status}</span>
+              </div>
+              <span className="record-list-row-meta">Day {entry.dayIssued} · {entry.depthBand} depth</span>
+              <span className="record-list-row-excerpt">{excerpt}</span>
+            </button>
+          );
+        })}
+        {filteredEntries.length === 0 ? (
+          <div className="record-empty-copy">No prophecies match the current filter.</div>
+        ) : null}
       </div>
 
       {selected ? (

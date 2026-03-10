@@ -14,7 +14,7 @@ export function PhilosopherThreatsPanel({ state }: { state: GameState }) {
   const threats = useMemo(() => selectPhilosopherThreats(state), [state]);
 
   if (threats.length === 0) {
-    return <div className="text-sm" style={{ color: "var(--text-dim)" }}>No philosopher movements detected.</div>;
+    return <div className="text-sm text-dim">No philosopher movements detected.</div>;
   }
 
   return (

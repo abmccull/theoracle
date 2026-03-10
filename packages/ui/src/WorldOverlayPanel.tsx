@@ -138,7 +138,10 @@ export function WorldOverlayPanel({ state }: { state: GameState }) {
             ))}
           </div>
 
-          {atlasTab === "factions" ? (
+          {atlasTab === "factions" ? (() => {
+            const hegemonId = factions.reduce((best, f) =>
+              f.credibility > (best?.credibility ?? 0) ? f : best, factions[0])?.id;
+            return (
             <div className="sidebar-block world-surface-section world-faction-section">
               <div className="world-card-header">
                 <div>
@@ -150,6 +153,7 @@ export function WorldOverlayPanel({ state }: { state: GameState }) {
               <div className="world-faction-grid">
               {factions.map((faction) => {
                 const rel = summarizeRelations(state, faction.id);
+                const factionAny = faction as any;
                 return (
                   <div key={faction.id} className="faction-row world-faction-card" id={`faction-card-${faction.id}`}>
                     <div className="world-faction-shell">
@@ -163,6 +167,7 @@ export function WorldOverlayPanel({ state }: { state: GameState }) {
                         <div className="faction-row-header">
                           <div className="world-faction-card-copy">
                             <span className="faction-row-name">{faction.name}</span>
+                            {faction.id === hegemonId ? <span className="oracle-inline-chip hegemon-chip">Hegemon</span> : null}
                             <span className={`agenda-chip ${faction.currentAgenda}`}>{faction.currentAgenda}</span>
                           </div>
                           <CredibilityPips value={faction.credibility} />
@@ -171,11 +176,31 @@ export function WorldOverlayPanel({ state }: { state: GameState }) {
                           <span>Ally: {rel.ally}</span>
                           <span>Rival: {rel.rival}</span>
                         </div>
+                        {faction.currentAgenda === "war" ? (
+                          <span className="text-xs text-red">At War</span>
+                        ) : null}
+                        {factionAny.embargoActive ? (
+                          <span className="text-xs text-red">Embargo Active</span>
+                        ) : null}
                         <div className="faction-row-details world-faction-stats" id={`faction-relations-${faction.id}`}>
                           <span>Favour {faction.favour}</span>
                           <span>Debt {faction.debt}</span>
                           <span>Trade {faction.tradeAccess ? "Open" : "Closed"}</span>
                         </div>
+                        {factionAny.memory ? (
+                          <div className="text-xs" style={{ marginTop: 2 }}>
+                            <span className={`faction-trust-badge ${factionAny.memory.trustState}`}>
+                              {factionAny.memory.trustState === "devotion" ? "Devoted" :
+                               factionAny.memory.trustState === "distrust" ? "Distrustful" : "Neutral"}
+                            </span>
+                            {factionAny.memory.consecutiveSuccesses > 0 ? (
+                              <span className="text-dim"> ({factionAny.memory.consecutiveSuccesses} prophecy successes)</span>
+                            ) : null}
+                            {factionAny.memory.consecutiveFailures > 0 ? (
+                              <span className="text-dim text-red"> ({factionAny.memory.consecutiveFailures} prophecy failures)</span>
+                            ) : null}
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   </div>
@@ -183,7 +208,8 @@ export function WorldOverlayPanel({ state }: { state: GameState }) {
               })}
               </div>
             </div>
-          ) : null}
+            );
+          })() : null}
 
           {atlasTab === "characters" ? (
             <div className="world-surface-section world-panel-frame">

@@ -38,11 +38,11 @@ export function ExcavationPanel({ state }: { state: GameState }) {
       <div className="sidebar-block">
         <div className="section-title">Excavation Sites</div>
         {sites.length === 0 ? (
-          <div className="text-sm" style={{ color: "var(--text-dim)" }}>No sites discovered yet.</div>
+          <div className="text-sm text-dim">No sites discovered yet.</div>
         ) : null}
         {sites.map((site) => (
-          <div key={site.id} className="excavation-site-card" style={{ marginBottom: "0.5rem" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div key={site.id} className="excavation-site-card mb-2">
+            <div className="flex-between">
               <strong className="text-sm">
                 {site.id.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
               </strong>
@@ -54,24 +54,23 @@ export function ExcavationPanel({ state }: { state: GameState }) {
                 {site.status.charAt(0).toUpperCase() + site.status.slice(1)}
               </span>
             </div>
-            <div className="text-xs" style={{ color: "var(--text-dim)" }}>
+            <div className="text-xs text-dim">
               Tile ({site.tile.x}, {site.tile.y})
             </div>
             <ProgressBar value={site.depth} max={site.maxDepth} label="Depth" />
-            <div className="text-xs" style={{ color: "var(--text-dim)", display: "flex", justifyContent: "space-between" }}>
+            <div className="text-xs text-dim flex-between">
               <span>Layers revealed: {site.revealedLayerCount}</span>
               {site.unclaimedRelicCount > 0 ? (
-                <span style={{ color: "var(--gold)" }}>
+                <span className="text-gold">
                   Unclaimed relics: {site.unclaimedRelicCount}
                 </span>
               ) : null}
             </div>
             {site.status === "discovered" ? (
               <button
-                className="oracle-button"
+                className="oracle-button mt-1"
                 onClick={() => dispatch.onBeginExcavation(site.id)}
                 type="button"
-                style={{ marginTop: "0.3rem" }}
               >
                 Begin Excavation
               </button>
@@ -85,8 +84,8 @@ export function ExcavationPanel({ state }: { state: GameState }) {
         <div className="sidebar-block">
           <div className="section-title">Relics</div>
           {relics.map((relic) => (
-            <div key={relic.id} className="history-row" style={{ marginBottom: "0.3rem" }}>
-              <div style={{ display: "flex", justifyContent: "space-between" }}>
+            <div key={relic.id} className="history-row mb-1">
+              <div className="flex-between">
                 <strong className="text-sm">{relic.name}</strong>
                 <span
                   className={`condition-badge ${
@@ -96,10 +95,10 @@ export function ExcavationPanel({ state }: { state: GameState }) {
                   {relic.kind}
                 </span>
               </div>
-              <div className="text-xs" style={{ color: "var(--text-dim)" }}>
+              <div className="text-xs text-dim">
                 {relic.domain} | {relic.effect.type.replace(/_/g, " ")} +{relic.effect.value}
               </div>
-              <div className="text-xs" style={{ color: "var(--text-dim)" }}>
+              <div className="text-xs text-dim">
                 Found Day {relic.discoveredDay}
               </div>
             </div>
@@ -112,8 +111,8 @@ export function ExcavationPanel({ state }: { state: GameState }) {
         <div className="sidebar-block">
           <div className="section-title">Sacred Sites</div>
           {sacredSites.map((site) => (
-            <div key={site.id} className="history-row" style={{ marginBottom: "0.3rem" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div key={site.id} className="history-row mb-1">
+              <div className="flex-between">
                 <strong className="text-sm">
                   {site.kind.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
                 </strong>
@@ -123,15 +122,14 @@ export function ExcavationPanel({ state }: { state: GameState }) {
                   {site.active ? "Active" : "Inactive"}
                 </span>
               </div>
-              <div className="text-xs" style={{ color: "var(--text-dim)" }}>
+              <div className="text-xs text-dim">
                 {site.bonuses.map((b) => `${b.type.replace(/_/g, " ")} +${b.value}`).join(", ")}
               </div>
               {!site.active ? (
                 <button
-                  className="oracle-button"
+                  className="oracle-button mt-1"
                   onClick={() => dispatch.onActivateSacredSite(site.id)}
                   type="button"
-                  style={{ marginTop: "0.3rem" }}
                 >
                   Activate (20g + 3 incense)
                 </button>

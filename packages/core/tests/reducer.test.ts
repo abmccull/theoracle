@@ -27,12 +27,15 @@ describe("Oracle reducers", () => {
 
   it("folds building startup stock into the precinct reserve ledger", () => {
     let state = createInitialState();
+    const initialOil = state.resources.olive_oil.amount;
+    const initialIncense = state.resources.incense.amount;
+    const initialGrain = state.resources.grain.amount;
     state = reduceCommand(state, { type: "PlaceRoadCommand", tile: { x: 30, y: 50 } }).state;
     state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 30, y: 48 } }).state;
 
-    expect(state.resources.olive_oil.amount).toBe(22);
-    expect(state.resources.incense.amount).toBe(15);
-    expect(state.resources.grain.amount).toBe(48);
+    expect(state.resources.olive_oil.amount - initialOil).toBe(4);
+    expect(state.resources.incense.amount - initialIncense).toBe(3);
+    expect(state.resources.grain.amount - initialGrain).toBe(8);
   });
 
   it("keeps event feed ids unique across repeated build actions", () => {
@@ -58,12 +61,14 @@ describe("Oracle reducers", () => {
     ];
     state = reduceCommand(state, { type: "PlaceRoadCommand", tile: { x: 30, y: 50 } }).state;
     state = reduceCommand(state, { type: "PlaceBuildingCommand", defId: "storehouse", tile: { x: 30, y: 48 } }).state;
+    const initialGold = state.resources.gold.amount;
+    const initialIncense = state.resources.incense.amount;
 
     state = reduceCommand(state, { type: "PurchaseTradeOfferCommand", offerId: "trade-1" }).state;
 
     expect(state.tradeOffers).toHaveLength(0);
-    expect(state.resources.gold.amount).toBeLessThan(120);
-    expect(state.resources.incense.amount).toBe(21);
+    expect(state.resources.gold.amount).toBe(initialGold - 12);
+    expect(state.resources.incense.amount - initialIncense).toBe(6);
     expect(state.buildings[0]?.storedResources.incense).toBe(9);
   });
 
@@ -81,14 +86,17 @@ describe("Oracle reducers", () => {
 
   it("purifies the Pythia by spending ritual supplies", () => {
     let state = createInitialState();
+    const initialWater = state.resources.sacred_water.amount;
+    const initialIncense = state.resources.incense.amount;
+    const initialAttunement = state.pythia.attunement;
     state.pythia.needs.purification = 76;
 
     state = reduceCommand(state, { type: "PurifyPythiaCommand" }).state;
 
-    expect(state.resources.sacred_water.amount).toBe(28);
-    expect(state.resources.incense.amount).toBe(11);
+    expect(state.resources.sacred_water.amount).toBe(initialWater - 2);
+    expect(state.resources.incense.amount).toBe(initialIncense - 1);
     expect(state.pythia.needs.purification).toBe(48);
-    expect(state.pythia.attunement).toBe(72);
+    expect(state.pythia.attunement).toBe(initialAttunement + 4);
   });
 
   it("refuses purification when supplies are missing", () => {

@@ -2,12 +2,14 @@ import React from "react";
 import { type GameState } from "@the-oracle/core";
 import { resourceDefs, type ResourceDef, type SeasonName } from "@the-oracle/content";
 import { CarrierDetailPanel } from "./CarrierDetailPanel";
+import { Icon } from "./Icons";
+import { useGameDispatch } from "./GameDispatchContext";
 import { trendArrow } from "./SharedComponents";
 
-const RESOURCE_ICON_MAP: Record<string, string> = {
-  gold: "\u25C9", olive_oil: "\uD83C\uDFFA", incense: "\uD83C\uDF3F",
-  sacred_water: "\uD83D\uDCA7", grain: "\uD83C\uDF3E", sacred_animals: "\uD83D\uDC11",
-  bread: "\uD83C\uDF5E", olives: "\uD83E\uDED2", papyrus: "\uD83D\uDCC3", scrolls: "\uD83D\uDCDC"
+const RESOURCE_ICON_NAMES: Record<string, string> = {
+  gold: "gold", olive_oil: "olive_oil", incense: "incense",
+  sacred_water: "sacred_water", grain: "grain", sacred_animals: "sacred_animals",
+  bread: "bread", olives: "olives", papyrus: "papyrus", scrolls: "scrolls"
 };
 
 function seasonalBadge(def: ResourceDef, season: string) {
@@ -31,6 +33,8 @@ const PRODUCTION_CHAIN: Record<string, { from?: string; to?: string[] }> = {
 };
 
 export function StoresOverlayPanel({ state }: { state: GameState }) {
+  const dispatch = useGameDispatch();
+  // onPurchaseTradeOffer is already defined in GameDispatchActions
   return (
     <>
       {["currency", "ritual", "food", "trade"].map((cat) => {
@@ -46,7 +50,7 @@ export function StoresOverlayPanel({ state }: { state: GameState }) {
               return (
                 <div key={def.id}>
                   <div className="store-row">
-                    <span className={`store-row-icon ${def.id === "gold" ? "gold-icon" : ""}`}>{RESOURCE_ICON_MAP[def.id] ?? ""}</span>
+                    <span className={`store-row-icon ${def.id === "gold" ? "gold-icon" : ""}`}>{RESOURCE_ICON_NAMES[def.id] ? <Icon name={RESOURCE_ICON_NAMES[def.id]} size={14} /> : null}</span>
                     <span className="store-row-name">{def.label}</span>
                     {seasonalBadge(def, state.clock.season)}
                     <span className="store-row-value">{res.amount.toFixed(0)}</span>
@@ -55,7 +59,7 @@ export function StoresOverlayPanel({ state }: { state: GameState }) {
                   {chain ? (
                     <div className="store-chain-detail">
                       {chain.from ? <span className="chain-producer">From: {chain.from}</span> : null}
-                      {chain.to ? <span className="chain-consumers"> {"\u2192"} {chain.to.join(", ")}</span> : null}
+                      {chain.to ? <span className="chain-consumers"> <Icon name="arrow_right" size={12} className="icon-inline" /> {chain.to.join(", ")}</span> : null}
                     </div>
                   ) : null}
                 </div>
@@ -64,6 +68,24 @@ export function StoresOverlayPanel({ state }: { state: GameState }) {
           </div>
         );
       })}
+      <div className="sidebar-block">
+        <div className="section-title">Trade</div>
+        {state.tradeOffers && state.tradeOffers.length > 0 ? (
+          state.tradeOffers.map((offer) => (
+            <div key={offer.id} className="priest-row">
+              <div className="priest-row-header">
+                <span className="priest-row-name">{offer.resourceId.replace(/_/g, ' ')} x{offer.amount}</span>
+                <span className="oracle-inline-chip">{offer.price}g</span>
+              </div>
+              <button className="oracle-button text-xs" onClick={() => dispatch.onPurchaseTradeOffer(offer.id)} type="button">
+                Buy
+              </button>
+            </div>
+          ))
+        ) : (
+          <div className="text-xs text-dim">No trade offers available this month.</div>
+        )}
+      </div>
       <CarrierDetailPanel state={state} />
     </>
   );

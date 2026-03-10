@@ -10,7 +10,7 @@ export function CarrierDetailPanel({ state }: { state: GameState }) {
   );
 
   if (carriers.length === 0) {
-    return <div className="text-sm" style={{ color: "var(--text-dim)" }}>No carriers active.</div>;
+    return <div className="text-sm text-dim">No carriers active.</div>;
   }
 
   return (
@@ -54,7 +54,7 @@ export function CarrierDetailPanel({ state }: { state: GameState }) {
               </div>
               <span className="stat-bar-value">{Math.round(c.fatigue ?? 0)}</span>
             </div>
-            <div className="text-xs" style={{ color: "var(--text-dim)" }}>
+            <div className="text-xs text-dim">
               Skill {c.haulingSkill ?? 0} · Radius {c.supplyRadius ?? 0}
               {c.carrying ? ` · Hauling ${c.carrying} (${(c.carryingAmount ?? 0).toFixed(0)})` : " · Idle"}
             </div>

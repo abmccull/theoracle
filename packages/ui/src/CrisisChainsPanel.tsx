@@ -12,7 +12,7 @@ export function CrisisChainsPanel({ state }: { state: GameState }) {
   const chains = useMemo(() => selectCrisisChains(state), [state]);
 
   if (chains.length === 0) {
-    return <div className="text-sm" style={{ color: "var(--text-dim)" }}>No active crises.</div>;
+    return <div className="text-sm text-dim">No active crises.</div>;
   }
 
   return (
@@ -27,9 +27,9 @@ export function CrisisChainsPanel({ state }: { state: GameState }) {
             </span>
           </div>
           {c.factionName ? (
-            <div className="text-xs" style={{ color: "var(--text-dim)" }}>{c.factionName} · Node {c.nodeId}</div>
+            <div className="text-xs text-dim">{c.factionName} · Node {c.nodeId}</div>
           ) : (
-            <div className="text-xs" style={{ color: "var(--text-dim)" }}>Node {c.nodeId}</div>
+            <div className="text-xs text-dim">Node {c.nodeId}</div>
           )}
           <div className="stat-bar-row">
             <span className="stat-bar-label">Pressure</span>
@@ -38,7 +38,7 @@ export function CrisisChainsPanel({ state }: { state: GameState }) {
             </div>
             <span className="stat-bar-value">{Math.round(c.pressure)}</span>
           </div>
-          <div className="text-xs" style={{ color: "var(--text-dim)" }}>Steps completed: {c.stepsCompleted}</div>
+          <div className="text-xs text-dim">Steps completed: {c.stepsCompleted}</div>
         </div>
       ))}
     </div>

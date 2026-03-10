@@ -109,6 +109,40 @@ export type RunSetupOriginOption = {
   disabled?: boolean;
 };
 
+export type RunSetupScenarioOption = {
+  id: string;
+  label: string;
+  summary: string;
+  difficulty?: number;
+  recommendedStartingTier?: string;
+};
+
+export type RunSetupDifficultyOption = {
+  id: string;
+  label: string;
+  title?: string;
+  summary: string;
+  tone?: WorldTone;
+};
+
+export type RunSetupPythiaOption = {
+  id: string;
+  label: string;
+  title?: string;
+  summary: string;
+  traits: string[];
+  statline: string;
+};
+
+export type RunSetupCityOption = {
+  id: string;
+  label: string;
+  summary: string;
+  controllingFactionLabel?: string;
+  pressure?: string;
+  tags?: string[];
+};
+
 export type RunSetupWorldPreview = {
   title?: string;
   summary: string;
@@ -120,6 +154,11 @@ export type RunSetupWorldPreview = {
   pressures?: WorldPressureSummary[];
   map?: WorldMapPreview;
   note?: string;
+  selectedScenario?: RunSetupScenarioOption;
+  selectedDifficulty?: RunSetupDifficultyOption;
+  selectedPythia?: RunSetupPythiaOption;
+  startingCities?: RunSetupCityOption[];
+  selectedStartingCityId?: string;
 };
 
 export function clampMeter(value?: number): number | undefined {

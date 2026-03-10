@@ -23,6 +23,15 @@ export function validateBuildingDefs(
       errors.push(`Building "${def.id}" has non-positive maxCondition (${def.maxCondition}).`);
     }
 
+    // Validate costResources references
+    if (def.costResources) {
+      for (const resId of Object.keys(def.costResources)) {
+        if (!resourceSet.has(resId)) {
+          errors.push(`Building "${def.id}" costResources references unknown resource "${resId}".`);
+        }
+      }
+    }
+
     // Validate upkeep resource references
     for (const resId of Object.keys(def.upkeep)) {
       if (!resourceSet.has(resId)) {

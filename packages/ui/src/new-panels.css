@@ -1,0 +1,105 @@
+/* ── City Overview Panel ── */
+
+.city-tier-village {
+  background: rgba(139, 119, 86, 0.25);
+  color: #c4a86b;
+}
+
+.city-tier-town {
+  background: rgba(107, 142, 97, 0.25);
+  color: #8fbf7e;
+}
+
+.city-tier-city {
+  background: rgba(86, 119, 162, 0.25);
+  color: #7fb3d4;
+}
+
+.city-tier-panhellenic_center {
+  background: rgba(182, 146, 60, 0.3);
+  color: #e6c456;
+}
+
+.prosperity-bar {
+  height: 8px;
+}
+
+.prosperity-fill {
+  background: linear-gradient(90deg, #8b7756, #c4a86b);
+}
+
+.revenue-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+/* ── Research Panel ── */
+
+.tech-card {
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.tech-card:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.tech-card-available {
+  border-left: 2px solid rgba(196, 168, 107, 0.4);
+  padding-left: 8px;
+}
+
+.tech-card-completed {
+  opacity: 0.7;
+  border-left: 2px solid rgba(107, 142, 97, 0.4);
+  padding-left: 8px;
+}
+
+/* ── Progression Panel ── */
+
+.milestone-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+}
+
+.milestone-check {
+  color: #8fbf7e;
+  font-weight: bold;
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.milestone-pending {
+  color: rgba(255, 255, 255, 0.3);
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.progression-phase-badge {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.7rem;
+}
+
+.progression-phase-early {
+  background: rgba(107, 142, 97, 0.25);
+  color: #8fbf7e;
+}
+
+.progression-phase-mid {
+  background: rgba(86, 119, 162, 0.25);
+  color: #7fb3d4;
+}
+
+.progression-phase-late {
+  background: rgba(182, 100, 60, 0.3);
+  color: #e6a056;
+}

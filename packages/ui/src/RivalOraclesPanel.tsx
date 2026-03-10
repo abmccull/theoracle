@@ -12,7 +12,7 @@ export function RivalOraclesPanel({ state }: { state: GameState }) {
   const rivals = useMemo(() => selectRivalOracleSummary(state), [state]);
 
   if (rivals.length === 0) {
-    return <div className="text-sm" style={{ color: "var(--text-dim)" }}>No rival oracles detected.</div>;
+    return <div className="text-sm text-dim">No rival oracles detected.</div>;
   }
 
   return (
@@ -26,7 +26,7 @@ export function RivalOraclesPanel({ state }: { state: GameState }) {
               {r.discovery}
             </span>
           </div>
-          <div className="text-xs" style={{ color: "var(--text-dim)" }}>
+          <div className="text-xs text-dim">
             {r.title} · {r.patronLabel}
           </div>
           <div className="rival-oracle-metrics">
@@ -53,7 +53,7 @@ export function RivalOraclesPanel({ state }: { state: GameState }) {
             </div>
           </div>
           {r.lastSummary ? (
-            <div className="text-xs" style={{ color: "var(--text-dim)" }}>
+            <div className="text-xs text-dim">
               {r.lastSummary}
             </div>
           ) : null}
